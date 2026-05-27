@@ -1,4 +1,5 @@
 from flask import Flask
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from config import Config
 from db import init_db
@@ -10,6 +11,7 @@ from routes.mpesa import mpesa_bp
 
 app = Flask(__name__)
 app.config.from_object(Config)
+CORS(app)
 
 jwt = JWTManager(app)
 # Register Blueprints
