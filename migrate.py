@@ -45,6 +45,11 @@ migrations = [
     "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_address TEXT",
     "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_city VARCHAR(100)",
     "ALTER TABLE orders ADD COLUMN IF NOT EXISTS country VARCHAR(50) NOT NULL DEFAULT 'Kenya'",
+
+    # Guest orders: make user_id nullable, add buyer contact fields
+    "ALTER TABLE orders MODIFY COLUMN user_id INT NULL",
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_name VARCHAR(255) NULL",
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_phone VARCHAR(50) NULL",
 ]
 
 for sql in migrations:

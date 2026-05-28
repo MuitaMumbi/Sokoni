@@ -5,6 +5,74 @@ from db import get_db
 orders_bp = Blueprint("orders", __name__)
 
 
+#  POST /api/orders/guest  — Place order without an account
+@orders_bp.route("/guest", methods=["POST"])
+def place_guest_order():
+    data = request.get_json() or {}
+
+    buyer_name       = data.get("buyer_name", "").strip()
+    buyer_phone      = data.get("buyer_phone", "").strip()
+    delivery_address = data.get("delivery_address", "").strip()
+    delivery_city    = data.get("delivery_city", "").strip()
+    country          = data.get("country", "Kenya").strip()
+    items            = data.get("items", [])
+
+    if not buyer_name or not buyer_phone:
+        return jsonify({"error": "buyer_name and buyer_phone are required"}), 400
+    if not delivery_address or not delivery_city:
+        return jsonify({"error": "delivery_address and delivery_city are required"}), 400
+    if not items:
+        return jsonify({"error": "No items in order"}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    total = 0
+    validated = []
+    for entry in items:
+        product_id = entry.get("product_id")
+        quantity   = int(entry.get("quantity", 1))
+        cursor.execute(
+            "SELECT product_id, product_name, product_cost, stock, min_order_qty FROM products WHERE product_id=%s",
+            (product_id,)
+        )
+        product = cursor.fetchone()
+        if not product:
+            return jsonify({"error": f"Product {product_id} not found"}), 404
+        if product["stock"] < quantity:
+            return jsonify({"error": f"Not enough stock for '{product['product_name']}'"}), 400
+        if quantity < product["min_order_qty"]:
+            return jsonify({"error": f"Min order for '{product['product_name']}' is {product['min_order_qty']}"}), 400
+        total += float(product["product_cost"]) * quantity
+        validated.append({**product, "quantity": quantity})
+
+    cursor.execute("""
+        INSERT INTO orders (user_id, total_amount, delivery_address, delivery_city, country, buyer_name, buyer_phone)
+        VALUES (NULL, %s, %s, %s, %s, %s, %s)
+    """, (round(total, 2), delivery_address, delivery_city, country, buyer_name, buyer_phone))
+    db.commit()
+    order_id = cursor.lastrowid
+
+    for p in validated:
+        cursor.execute(
+            "INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (%s, %s, %s, %s)",
+            (order_id, p["product_id"], p["quantity"], p["product_cost"])
+        )
+        cursor.execute(
+            "UPDATE products SET stock = stock - %s WHERE product_id = %s",
+            (p["quantity"], p["product_id"])
+        )
+
+    db.commit()
+    cursor.close()
+
+    return jsonify({
+        "message":      "Order placed successfully",
+        "order_id":     order_id,
+        "total_amount": round(total, 2),
+    }), 201
+
+
 #  POST /api/orders/  — Place order from cart
 @orders_bp.route("/", methods=["POST"])
 @jwt_required()
