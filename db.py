@@ -111,4 +111,4 @@ def init_db():
     conn.commit()
     cursor.close()
     conn.close()
-    print("✅  Sokoni database and tables initialized.")
+    print("Sokoni database and tables initialized.")

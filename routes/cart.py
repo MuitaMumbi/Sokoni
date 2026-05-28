@@ -15,6 +15,7 @@ def get_cart():
     cursor.execute("""
         SELECT c.cart_id, c.quantity, c.added_at,
                p.product_id, p.product_name, p.product_cost, p.product_photo,
+               p.unit, p.min_order_qty,
                (c.quantity * p.product_cost) AS subtotal
         FROM cart c
         JOIN products p ON c.product_id = p.product_id
