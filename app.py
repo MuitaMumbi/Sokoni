@@ -9,6 +9,7 @@ from routes.cart import cart_bp
 from routes.orders import orders_bp
 from routes.mpesa import mpesa_bp
 from routes.categories import categories_bp
+from routes.supplier import supplier_bp
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -22,6 +23,7 @@ app.register_blueprint(cart_bp, url_prefix="/api/cart")
 app.register_blueprint(orders_bp, url_prefix="/api/orders")
 app.register_blueprint(mpesa_bp, url_prefix="/api/mpesa")
 app.register_blueprint(categories_bp, url_prefix="/api/categories")
+app.register_blueprint(supplier_bp, url_prefix="/api/supplier")
 
 # Initialize DB tables on startup
 with app.app_context():
