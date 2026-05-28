@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from config import Config
@@ -35,5 +35,9 @@ with app.app_context():
 def index():
     return {"message": "Welcome to Sokoni API 🛒", "version": "1.0.0"}, 200
 
+@app.route("/uploads/products/<filename>")
+def serve_upload(filename):
+    return send_from_directory("uploads/products", filename)
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
