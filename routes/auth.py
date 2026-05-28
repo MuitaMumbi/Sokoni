@@ -7,7 +7,7 @@ from utils.email_utils import generate_activation_code, send_activation_email
 
 auth_bp = Blueprint("auth", __name__)
 
-VALID_ROLES    = {"retailer", "supplier"}
+VALID_ROLES    = {"retailer", "supplier", "admin"}
 VALID_COUNTRIES = {"Kenya", "Tanzania", "Uganda", "Rwanda", "Ethiopia"}
 
 
@@ -41,7 +41,7 @@ def signup():
     if role == "supplier" and not business_name:
         return jsonify({"error": "business_name is required for suppliers"}), 400
 
-    # Suppliers require admin approval; retailers are auto-approved
+    # Suppliers require admin approval; retailers and admins are auto-approved
     is_approved = 0 if role == "supplier" else 1
 
     db     = get_db()
