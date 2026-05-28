@@ -50,6 +50,7 @@ migrations = [
     "ALTER TABLE orders MODIFY COLUMN user_id INT NULL",
     "ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_name VARCHAR(255) NULL",
     "ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_phone VARCHAR(50) NULL",
+    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyer_email VARCHAR(255) NULL",
 ]
 
 for sql in migrations:

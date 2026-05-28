@@ -12,6 +12,7 @@ def place_guest_order():
 
     buyer_name       = data.get("buyer_name", "").strip()
     buyer_phone      = data.get("buyer_phone", "").strip()
+    buyer_email      = data.get("buyer_email", "").strip().lower()
     delivery_address = data.get("delivery_address", "").strip()
     delivery_city    = data.get("delivery_city", "").strip()
     country          = data.get("country", "Kenya").strip()
@@ -47,9 +48,9 @@ def place_guest_order():
         validated.append({**product, "quantity": quantity})
 
     cursor.execute("""
-        INSERT INTO orders (user_id, total_amount, delivery_address, delivery_city, country, buyer_name, buyer_phone)
-        VALUES (NULL, %s, %s, %s, %s, %s, %s)
-    """, (round(total, 2), delivery_address, delivery_city, country, buyer_name, buyer_phone))
+        INSERT INTO orders (user_id, total_amount, delivery_address, delivery_city, country, buyer_name, buyer_phone, buyer_email)
+        VALUES (NULL, %s, %s, %s, %s, %s, %s, %s)
+    """, (round(total, 2), delivery_address, delivery_city, country, buyer_name, buyer_phone, buyer_email or None))
     db.commit()
     order_id = cursor.lastrowid
 

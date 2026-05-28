@@ -1,3 +1,5 @@
+import random
+import string
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -224,6 +226,143 @@ def me():
         return jsonify({"error": "User not found"}), 404
 
     return jsonify({"user": user}), 200
+
+
+#  POST /api/auth/check-email  — does this email have an account?
+@auth_bp.route("/check-email", methods=["POST"])
+def check_email():
+    email = (request.get_json() or {}).get("email", "").strip().lower()
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT user_id, is_active FROM users WHERE email=%s", (email,))
+    user = cursor.fetchone()
+    cursor.close()
+
+    return jsonify({"exists": bool(user and user["is_active"])}), 200
+
+
+#  POST /api/auth/retailer-send-code  — send activation code, create placeholder if needed
+@auth_bp.route("/retailer-send-code", methods=["POST"])
+def retailer_send_code():
+    email = (request.get_json() or {}).get("email", "").strip().lower()
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT user_id, username, is_active FROM users WHERE email=%s", (email,))
+    user = cursor.fetchone()
+
+    if user and user["is_active"]:
+        cursor.close()
+        return jsonify({"error": "An account with this email already exists. Please sign in."}), 409
+
+    code        = generate_activation_code()
+    code_expiry = datetime.utcnow() + timedelta(minutes=30)
+
+    if user:
+        cursor.execute(
+            "UPDATE users SET activation_code=%s, activation_expires=%s WHERE user_id=%s",
+            (code, code_expiry, user["user_id"])
+        )
+        username = user["username"]
+    else:
+        # Create a lightweight placeholder — details filled in at retailer-signup
+        username = email.split("@")[0] + "_" + "".join(random.choices(string.digits, k=4))
+        hashed_pw = generate_password_hash("".join(random.choices(string.ascii_letters, k=16)))
+        cursor.execute("""
+            INSERT INTO users
+                (username, email, phone, password, role, is_approved, is_active,
+                 activation_code, activation_expires)
+            VALUES (%s, %s, '', %s, 'retailer', 1, 0, %s, %s)
+        """, (username, email, hashed_pw, code, code_expiry))
+
+    db.commit()
+    email_sent = send_activation_email(email, username, code)
+    cursor.close()
+
+    return jsonify({
+        "message":             f"Activation code sent to {email}.",
+        "email_sent":          email_sent,
+        "activation_code_dev": code if current_app.config["DEBUG"] else None,
+    }), 200
+
+
+#  POST /api/auth/retailer-signup  — verify code, set password, link past orders
+@auth_bp.route("/retailer-signup", methods=["POST"])
+def retailer_signup():
+    data     = request.get_json() or {}
+    email    = data.get("email", "").strip().lower()
+    code     = data.get("code", "").strip()
+    password = data.get("password", "")
+    name     = data.get("name", "").strip()
+    phone    = data.get("phone", "").strip()
+
+    if not all([email, code, password, name, phone]):
+        return jsonify({"error": "All fields are required"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT user_id, activation_code, activation_expires
+        FROM users WHERE email=%s
+    """, (email,))
+    user = cursor.fetchone()
+
+    if not user:
+        return jsonify({"error": "No pending account for this email. Request a code first."}), 404
+    if user["activation_code"] != code:
+        return jsonify({"error": "Invalid activation code"}), 400
+    if datetime.utcnow() > user["activation_expires"]:
+        return jsonify({"error": "Code has expired. Request a new one."}), 400
+
+    hashed_pw = generate_password_hash(password)
+    # Use name as username if unique, else append random digits
+    username = name.replace(" ", "").lower()
+    cursor.execute("SELECT user_id FROM users WHERE username=%s AND user_id != %s", (username, user["user_id"]))
+    if cursor.fetchone():
+        username = username + "_" + "".join(random.choices(string.digits, k=4))
+
+    cursor.execute("""
+        UPDATE users
+        SET username=%s, phone=%s, password=%s,
+            is_active=1, activation_code=NULL, activation_expires=NULL
+        WHERE user_id=%s
+    """, (username, phone, hashed_pw, user["user_id"]))
+
+    # Link all past guest orders placed with this email
+    cursor.execute("""
+        UPDATE orders SET user_id=%s
+        WHERE buyer_email=%s AND user_id IS NULL
+    """, (user["user_id"], email))
+
+    db.commit()
+
+    token = create_access_token(
+        identity=str(user["user_id"]),
+        additional_claims={"role": "retailer"}
+    )
+
+    cursor.close()
+    return jsonify({
+        "message": "Account created successfully.",
+        "token": token,
+        "user": {
+            "user_id":       user["user_id"],
+            "username":      username,
+            "email":         email,
+            "phone":         phone,
+            "role":          "retailer",
+            "business_name": None,
+            "country":       "Kenya",
+        }
+    }), 201
 
 
 #  GET /api/auth/suppliers  (admin — list pending suppliers)
