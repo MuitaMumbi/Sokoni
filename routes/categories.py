@@ -84,6 +84,32 @@ def get_category(category_id):
     return jsonify({"category": category}), 200
 
 
+#  PUT /api/categories/<id>  (admin)
+@categories_bp.route("/<int:category_id>", methods=["PUT"])
+@jwt_required()
+def update_category(category_id):
+    err = require_admin()
+    if err:
+        return err
+
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    slug = data.get("slug", "").strip().lower().replace(" ", "-")
+
+    if not name or not slug:
+        return jsonify({"error": "name and slug are required"}), 400
+
+    db     = get_db()
+    cursor = db.cursor()
+    cursor.execute(
+        "UPDATE categories SET name=%s, slug=%s WHERE category_id=%s",
+        (name, slug, category_id)
+    )
+    db.commit()
+    cursor.close()
+    return jsonify({"message": "Category updated"}), 200
+
+
 #  DELETE /api/categories/<id>  (admin)
 @categories_bp.route("/<int:category_id>", methods=["DELETE"])
 @jwt_required()

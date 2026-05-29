@@ -31,14 +31,17 @@ def add_product():
 
     user_id = get_jwt_identity()
 
-    product_name  = request.form.get("product_name", "").strip()
-    product_cost  = request.form.get("product_cost")
-    product_desc  = request.form.get("product_desc", "")
-    stock         = request.form.get("stock", 0)
-    category_id   = request.form.get("category_id")
-    min_order_qty = request.form.get("min_order_qty", 1)
-    unit          = request.form.get("unit", "piece").strip()
-    country       = request.form.get("country", "Kenya").strip()
+    is_multipart = request.content_type and "multipart" in request.content_type
+    raw = request.form if is_multipart else (request.get_json() or {})
+
+    product_name  = (raw.get("product_name") or "").strip()
+    product_cost  = raw.get("product_cost")
+    product_desc  = raw.get("product_desc") or ""
+    stock         = raw.get("stock", 0)
+    category_id   = raw.get("category_id")
+    min_order_qty = raw.get("min_order_qty", 1)
+    unit          = (raw.get("unit") or "piece").strip()
+    country       = (raw.get("country") or "Kenya").strip()
 
     if not product_name or product_cost is None:
         return jsonify({"error": "product_name and product_cost are required"}), 400
@@ -180,7 +183,8 @@ def update_product(product_id):
     if claims.get("role") == "supplier" and str(product["created_by"]) != str(user_id):
         return jsonify({"error": "You can only edit your own products"}), 403
 
-    data          = request.get_json() or {}
+    is_multipart = request.content_type and "multipart" in request.content_type
+    data = request.form if is_multipart else (request.get_json() or {})
     updates, vals = [], []
 
     for field in ("product_name", "product_desc", "unit", "country"):
@@ -194,6 +198,16 @@ def update_product(product_id):
         updates.append("min_order_qty=%s"); vals.append(int(data["min_order_qty"]))
     if data.get("category_id") is not None:
         updates.append("category_id=%s"); vals.append(int(data["category_id"]))
+
+    if is_multipart and "product_photo" in request.files:
+        file = request.files["product_photo"]
+        if file and allowed_file(file.filename):
+            ext        = secure_filename(file.filename).rsplit(".", 1)[1].lower()
+            filename   = f"{uuid.uuid4().hex}.{ext}"
+            upload_dir = current_app.config["UPLOAD_FOLDER"]
+            os.makedirs(upload_dir, exist_ok=True)
+            file.save(os.path.join(upload_dir, filename))
+            updates.append("product_photo=%s"); vals.append(f"{upload_dir}/{filename}")
 
     if not updates:
         return jsonify({"error": "No fields to update"}), 400
