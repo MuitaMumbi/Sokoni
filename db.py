@@ -67,16 +67,30 @@ def init_db():
     # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id       INT AUTO_INCREMENT PRIMARY KEY,
-            username      VARCHAR(100) NOT NULL UNIQUE,
-            email         VARCHAR(150) NOT NULL UNIQUE,
-            phone         VARCHAR(20)  NOT NULL,
-            password      VARCHAR(255) NOT NULL,
-            is_active     TINYINT(1)   NOT NULL DEFAULT 0,
-            activation_code VARCHAR(6),
+            user_id            INT AUTO_INCREMENT PRIMARY KEY,
+            username           VARCHAR(100) NOT NULL UNIQUE,
+            email              VARCHAR(150) NOT NULL UNIQUE,
+            phone              VARCHAR(20)  NOT NULL,
+            password           VARCHAR(255) NOT NULL,
+            is_active          TINYINT(1)   NOT NULL DEFAULT 0,
+            is_approved        TINYINT(1)   NOT NULL DEFAULT 0,
+            activation_code    VARCHAR(6),
             activation_expires DATETIME,
-            role          ENUM('customer','admin') NOT NULL DEFAULT 'customer',
-            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            role               ENUM('customer','admin','supplier','retailer') NOT NULL DEFAULT 'retailer',
+            business_name      VARCHAR(200),
+            country            VARCHAR(100) DEFAULT 'Kenya',
+            created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Categories table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            category_id INT AUTO_INCREMENT PRIMARY KEY,
+            name        VARCHAR(100) NOT NULL,
+            slug        VARCHAR(100) NOT NULL UNIQUE,
+            parent_id   INT DEFAULT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -89,6 +103,10 @@ def init_db():
             product_desc  TEXT,
             product_photo VARCHAR(255),
             stock         INT NOT NULL DEFAULT 0,
+            min_order_qty INT NOT NULL DEFAULT 1,
+            unit          VARCHAR(50) DEFAULT 'piece',
+            country       VARCHAR(100) DEFAULT 'Kenya',
+            category_id   INT,
             created_by    INT,
             created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
@@ -112,14 +130,22 @@ def init_db():
     # Orders table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
-            order_id      INT AUTO_INCREMENT PRIMARY KEY,
-            user_id       INT NOT NULL,
-            total_amount  DECIMAL(10,2) NOT NULL,
-            status        ENUM('pending','paid','shipped','delivered','cancelled') NOT NULL DEFAULT 'pending',
+            order_id         INT AUTO_INCREMENT PRIMARY KEY,
+            user_id          INT,
+            total_amount     DECIMAL(10,2) NOT NULL,
+            discount_amount  DECIMAL(10,2) DEFAULT 0,
+            promo_code       VARCHAR(50) DEFAULT NULL,
+            status           ENUM('pending','paid','shipped','delivered','cancelled') NOT NULL DEFAULT 'pending',
+            delivery_address VARCHAR(255),
+            delivery_city    VARCHAR(100),
+            country          VARCHAR(100) DEFAULT 'Kenya',
+            buyer_name       VARCHAR(200),
+            buyer_phone      VARCHAR(30),
+            buyer_email      VARCHAR(150),
             mpesa_checkout_id VARCHAR(100),
-            mpesa_receipt   VARCHAR(100),
-            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            mpesa_receipt    VARCHAR(100),
+            created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
         )
     """)
 
