@@ -178,19 +178,38 @@ def init_db():
         )
     """)
 
-    # Migrate orders table — add promo / discount columns if missing
-    for col, definition in [
-        ("promo_code",      "VARCHAR(50) DEFAULT NULL"),
-        ("discount_amount", "DECIMAL(10,2) DEFAULT 0"),
-    ]:
+    # Column migrations — add any missing columns to existing tables
+    migrations = [
+        ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("users",    "business_name",       "VARCHAR(200) DEFAULT NULL"),
+        ("users",    "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("products", "min_order_qty",       "INT NOT NULL DEFAULT 1"),
+        ("products", "unit",                "VARCHAR(50) DEFAULT 'piece'"),
+        ("products", "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("products", "category_id",         "INT DEFAULT NULL"),
+        ("orders",   "promo_code",          "VARCHAR(50) DEFAULT NULL"),
+        ("orders",   "discount_amount",     "DECIMAL(10,2) DEFAULT 0"),
+        ("orders",   "delivery_address",    "VARCHAR(255) DEFAULT NULL"),
+        ("orders",   "delivery_city",       "VARCHAR(100) DEFAULT NULL"),
+        ("orders",   "buyer_name",          "VARCHAR(200) DEFAULT NULL"),
+        ("orders",   "buyer_phone",         "VARCHAR(30) DEFAULT NULL"),
+        ("orders",   "buyer_email",         "VARCHAR(150) DEFAULT NULL"),
+    ]
+    for table, col, definition in migrations:
         cursor.execute("""
             SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME   = 'orders'
+              AND TABLE_NAME   = %s
               AND COLUMN_NAME  = %s
-        """, (col,))
+        """, (table, col))
         if cursor.fetchone()[0] == 0:
-            cursor.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")
+            cursor.execute(f"ALTER TABLE `{table}` ADD COLUMN `{col}` {definition}")
+
+    # Ensure role ENUM includes all roles
+    cursor.execute("""
+        ALTER TABLE users MODIFY COLUMN role
+        ENUM('customer','admin','supplier','retailer') NOT NULL DEFAULT 'retailer'
+    """)
 
     conn.commit()
     cursor.close()
