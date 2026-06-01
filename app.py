@@ -30,12 +30,13 @@ app.register_blueprint(admin_bp,    url_prefix="/api/admin")
 app.register_blueprint(promos_bp,   url_prefix="/api/promos")
 
 # Initialize DB tables on startup
-import logging
+import logging, traceback
 with app.app_context():
     try:
         init_db()
     except Exception as e:
-        logging.error(f"[DB] init_db failed: {e} — check MYSQL_* env vars")
+        logging.error(f"[DB] init_db failed — {type(e).__name__}: {e.args}")
+        logging.error(traceback.format_exc())
 
 @app.route("/")
 def index():

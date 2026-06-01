@@ -14,9 +14,8 @@ def _ssl_args(host: str) -> dict:
         if os.path.exists(local_ca):
             ca = local_ca
     if ca:
-        return {"ssl_ca": ca, "ssl_verify_cert": True, "use_pure": True}
-    # No CA cert available — connect without cert verification
-    return {"ssl_verify_cert": False, "use_pure": True}
+        return {"ssl_ca": ca, "ssl_verify_cert": True}
+    return {"ssl_verify_cert": False}
 
 
 def get_db():
