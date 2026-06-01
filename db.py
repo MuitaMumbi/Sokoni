@@ -9,9 +9,9 @@ def _ssl_args(host: str) -> dict:
         return {}
     ca = os.getenv("MYSQL_SSL_CA", "")
     if ca:
-        return {"ssl_ca": ca, "ssl_verify_cert": True}
-    # Remote host (e.g. Aiven) — encrypt but skip cert verification
-    return {"ssl_verify_cert": False, "ssl_verify_identity": False}
+        return {"ssl_ca": ca, "ssl_verify_cert": True, "use_pure": True}
+    # Remote host (e.g. Aiven) — SSL required, skip cert verification
+    return {"ssl_verify_cert": False, "use_pure": True}
 
 
 def get_db():
