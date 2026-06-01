@@ -38,19 +38,27 @@ def close_db(e=None):
 
 def init_db():
     """Create all required tables if they don't exist."""
-    host = current_app.config["MYSQL_HOST"]
+    host   = current_app.config["MYSQL_HOST"]
+    db     = current_app.config["MYSQL_DB"]
+    is_local = host in ("localhost", "127.0.0.1")
+
     conn = mysql.connector.connect(
         host=host,
         port=current_app.config["MYSQL_PORT"],
         user=current_app.config["MYSQL_USER"],
         password=current_app.config["MYSQL_PASSWORD"],
+        database=None if is_local else db,
         **_ssl_args(host),
     )
     cursor = conn.cursor()
 
-    # Create database
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {current_app.config['MYSQL_DB']}")
-    cursor.execute(f"USE {current_app.config['MYSQL_DB']}")
+    if is_local:
+        # Local dev: create the database if it doesn't exist
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
+        cursor.execute(f"USE {db}")
+    else:
+        # Managed host (Aiven etc.): database already exists, just select it
+        cursor.execute(f"USE {db}")
 
     # Users table
     cursor.execute("""
