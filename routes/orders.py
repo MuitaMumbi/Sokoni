@@ -1,8 +1,24 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from db import get_db
+from routes.promos import _apply_promo
 
 orders_bp = Blueprint("orders", __name__)
+
+
+def _resolve_promo(code, cart_total, cursor):
+    """Returns (promo_id, discount) or (None, 0) if no code given. Raises on invalid."""
+    if not code:
+        return None, 0.0
+    return _apply_promo(code, cart_total, cursor)
+
+
+def _increment_promo(cursor, promo_id):
+    if promo_id:
+        cursor.execute(
+            "UPDATE promo_codes SET used_count = used_count + 1 WHERE promo_id=%s",
+            (promo_id,)
+        )
 
 
 #  POST /api/orders/guest  — Place order without an account
@@ -17,6 +33,7 @@ def place_guest_order():
     delivery_city    = data.get("delivery_city", "").strip()
     country          = data.get("country", "Kenya").strip()
     items            = data.get("items", [])
+    promo_code       = (data.get("promo_code") or "").strip().upper() or None
 
     if not buyer_name or not buyer_phone:
         return jsonify({"error": "buyer_name and buyer_phone are required"}), 400
@@ -28,7 +45,7 @@ def place_guest_order():
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
-    total = 0
+    subtotal = 0
     validated = []
     for entry in items:
         product_id = entry.get("product_id")
@@ -44,13 +61,26 @@ def place_guest_order():
             return jsonify({"error": f"Not enough stock for '{product['product_name']}'"}), 400
         if quantity < product["min_order_qty"]:
             return jsonify({"error": f"Min order for '{product['product_name']}' is {product['min_order_qty']}"}), 400
-        total += float(product["product_cost"]) * quantity
+        subtotal += float(product["product_cost"]) * quantity
         validated.append({**product, "quantity": quantity})
 
+    try:
+        promo_id, discount = _resolve_promo(promo_code, subtotal, cursor)
+    except ValueError as e:
+        cursor.close()
+        return jsonify({"error": str(e)}), 400
+
+    total = round(subtotal - discount, 2)
+
     cursor.execute("""
-        INSERT INTO orders (user_id, total_amount, delivery_address, delivery_city, country, buyer_name, buyer_phone, buyer_email)
-        VALUES (NULL, %s, %s, %s, %s, %s, %s, %s)
-    """, (round(total, 2), delivery_address, delivery_city, country, buyer_name, buyer_phone, buyer_email or None))
+        INSERT INTO orders
+            (user_id, total_amount, discount_amount, promo_code,
+             delivery_address, delivery_city, country,
+             buyer_name, buyer_phone, buyer_email)
+        VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (total, round(discount, 2), promo_code,
+          delivery_address, delivery_city, country,
+          buyer_name, buyer_phone, buyer_email or None))
     db.commit()
     order_id = cursor.lastrowid
 
@@ -64,13 +94,16 @@ def place_guest_order():
             (p["quantity"], p["product_id"])
         )
 
+    _increment_promo(cursor, promo_id)
     db.commit()
     cursor.close()
 
     return jsonify({
-        "message":      "Order placed successfully",
-        "order_id":     order_id,
-        "total_amount": round(total, 2),
+        "message":         "Order placed successfully",
+        "order_id":        order_id,
+        "subtotal":        round(subtotal, 2),
+        "discount_amount": round(discount, 2),
+        "total_amount":    total,
     }), 201
 
 
@@ -86,6 +119,7 @@ def place_order():
     delivery_address = data.get("delivery_address", "").strip()
     delivery_city    = data.get("delivery_city", "").strip()
     country          = data.get("country", "Kenya").strip()
+    promo_code       = (data.get("promo_code") or "").strip().upper() or None
 
     if not delivery_address or not delivery_city:
         return jsonify({"error": "delivery_address and delivery_city are required"}), 400
@@ -112,12 +146,23 @@ def place_order():
                 "error": f"Minimum order for '{item['product_name']}' is {item['min_order_qty']}"
             }), 400
 
-    total = sum(float(i["product_cost"]) * i["quantity"] for i in cart_items)
+    subtotal = sum(float(i["product_cost"]) * i["quantity"] for i in cart_items)
+
+    try:
+        promo_id, discount = _resolve_promo(promo_code, subtotal, cursor)
+    except ValueError as e:
+        cursor.close()
+        return jsonify({"error": str(e)}), 400
+
+    total = round(subtotal - discount, 2)
 
     cursor.execute("""
-        INSERT INTO orders (user_id, total_amount, delivery_address, delivery_city, country)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (user_id, round(total, 2), delivery_address, delivery_city, country))
+        INSERT INTO orders
+            (user_id, total_amount, discount_amount, promo_code,
+             delivery_address, delivery_city, country)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (user_id, total, round(discount, 2), promo_code,
+          delivery_address, delivery_city, country))
     db.commit()
     order_id = cursor.lastrowid
 
@@ -130,17 +175,20 @@ def place_order():
             UPDATE products SET stock = stock - %s WHERE product_id = %s
         """, (item["quantity"], item["product_id"]))
 
+    _increment_promo(cursor, promo_id)
     cursor.execute("DELETE FROM cart WHERE user_id=%s", (user_id,))
     db.commit()
     cursor.close()
 
     return jsonify({
-        "message":        "Order placed successfully",
-        "order_id":       order_id,
-        "total_amount":   round(total, 2),
-        "status":         "pending",
-        "delivery_city":  delivery_city,
-        "country":        country,
+        "message":         "Order placed successfully",
+        "order_id":        order_id,
+        "subtotal":        round(subtotal, 2),
+        "discount_amount": round(discount, 2),
+        "total_amount":    total,
+        "status":          "pending",
+        "delivery_city":   delivery_city,
+        "country":         country,
     }), 201
 
 
@@ -238,3 +286,20 @@ def update_order_status(order_id):
     cursor.close()
 
     return jsonify({"message": f"Order status updated to '{status}'"}), 200
+
+
+#  GET /api/orders/<id>/status  — public, used for M-Pesa polling
+@orders_bp.route("/<int:order_id>/status", methods=["GET"])
+def order_status(order_id):
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT order_id, status, mpesa_receipt, total_amount FROM orders WHERE order_id=%s",
+        (order_id,)
+    )
+    order = cursor.fetchone()
+    cursor.close()
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+    return jsonify({"status": order["status"], "mpesa_receipt": order["mpesa_receipt"],
+                    "total_amount": float(order["total_amount"])}), 200

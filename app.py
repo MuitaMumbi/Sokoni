@@ -11,6 +11,7 @@ from routes.mpesa import mpesa_bp
 from routes.categories import categories_bp
 from routes.supplier import supplier_bp
 from routes.admin import admin_bp
+from routes.promos import promos_bp
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -26,6 +27,7 @@ app.register_blueprint(mpesa_bp, url_prefix="/api/mpesa")
 app.register_blueprint(categories_bp, url_prefix="/api/categories")
 app.register_blueprint(supplier_bp, url_prefix="/api/supplier")
 app.register_blueprint(admin_bp,    url_prefix="/api/admin")
+app.register_blueprint(promos_bp,   url_prefix="/api/promos")
 
 # Initialize DB tables on startup
 with app.app_context():

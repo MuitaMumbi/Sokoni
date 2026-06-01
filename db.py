@@ -108,6 +108,36 @@ def init_db():
         )
     """)
 
+    # Promo codes table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            promo_id         INT AUTO_INCREMENT PRIMARY KEY,
+            code             VARCHAR(50)  NOT NULL UNIQUE,
+            type             ENUM('percent','flat') NOT NULL DEFAULT 'percent',
+            value            DECIMAL(10,2) NOT NULL,
+            min_order_amount DECIMAL(10,2) DEFAULT 0,
+            max_uses         INT DEFAULT NULL,
+            used_count       INT DEFAULT 0,
+            expires_at       DATETIME DEFAULT NULL,
+            is_active        TINYINT(1) DEFAULT 1,
+            created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Migrate orders table — add promo / discount columns if missing
+    for col, definition in [
+        ("promo_code",      "VARCHAR(50) DEFAULT NULL"),
+        ("discount_amount", "DECIMAL(10,2) DEFAULT 0"),
+    ]:
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME   = 'orders'
+              AND COLUMN_NAME  = %s
+        """, (col,))
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")
+
     conn.commit()
     cursor.close()
     conn.close()
