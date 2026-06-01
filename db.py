@@ -1,17 +1,31 @@
+import os
 import mysql.connector
 from flask import current_app, g
+
+
+def _ssl_args(host: str) -> dict:
+    """Return SSL kwargs for mysql.connector based on environment."""
+    if host in ("localhost", "127.0.0.1"):
+        return {}
+    ca = os.getenv("MYSQL_SSL_CA", "")
+    if ca:
+        return {"ssl_ca": ca, "ssl_verify_cert": True}
+    # Remote host (e.g. Aiven) — encrypt but skip cert verification
+    return {"ssl_verify_cert": False, "ssl_verify_identity": False}
 
 
 def get_db():
     """Get a database connection, reusing one per request."""
     if "db" not in g:
+        host = current_app.config["MYSQL_HOST"]
         g.db = mysql.connector.connect(
-            host=current_app.config["MYSQL_HOST"],
+            host=host,
             port=current_app.config["MYSQL_PORT"],
             user=current_app.config["MYSQL_USER"],
             password=current_app.config["MYSQL_PASSWORD"],
             database=current_app.config["MYSQL_DB"],
             autocommit=False,
+            **_ssl_args(host),
         )
     return g.db
 
@@ -24,11 +38,13 @@ def close_db(e=None):
 
 def init_db():
     """Create all required tables if they don't exist."""
+    host = current_app.config["MYSQL_HOST"]
     conn = mysql.connector.connect(
-        host=current_app.config["MYSQL_HOST"],
+        host=host,
         port=current_app.config["MYSQL_PORT"],
         user=current_app.config["MYSQL_USER"],
         password=current_app.config["MYSQL_PASSWORD"],
+        **_ssl_args(host),
     )
     cursor = conn.cursor()
 
