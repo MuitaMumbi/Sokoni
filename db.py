@@ -191,6 +191,7 @@ def init_db():
         ("orders",   "discount_amount",     "DECIMAL(10,2) DEFAULT 0"),
         ("orders",   "delivery_address",    "VARCHAR(255) DEFAULT NULL"),
         ("orders",   "delivery_city",       "VARCHAR(100) DEFAULT NULL"),
+        ("orders",   "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
         ("orders",   "buyer_name",          "VARCHAR(200) DEFAULT NULL"),
         ("orders",   "buyer_phone",         "VARCHAR(30) DEFAULT NULL"),
         ("orders",   "buyer_email",         "VARCHAR(150) DEFAULT NULL"),
