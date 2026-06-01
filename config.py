@@ -19,6 +19,7 @@ class Config:
     MYSQL_USER = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB = os.getenv("MYSQL_DB", "sokoni_db")
+    MYSQL_SSL_CA = os.getenv("MYSQL_SSL_CA", "")
 
     # Email (for activation codes)
     MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
