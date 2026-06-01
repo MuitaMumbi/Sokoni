@@ -7,10 +7,15 @@ def _ssl_args(host: str) -> dict:
     """Return SSL kwargs for mysql.connector based on environment."""
     if host in ("localhost", "127.0.0.1"):
         return {}
+    # Check env var first, then fall back to ca.pem in project root
     ca = os.getenv("MYSQL_SSL_CA", "")
+    if not ca:
+        local_ca = os.path.join(os.path.dirname(__file__), "ca.pem")
+        if os.path.exists(local_ca):
+            ca = local_ca
     if ca:
         return {"ssl_ca": ca, "ssl_verify_cert": True, "use_pure": True}
-    # Remote host (e.g. Aiven) — SSL required, skip cert verification
+    # No CA cert available — connect without cert verification
     return {"ssl_verify_cert": False, "use_pure": True}
 
 
