@@ -4,10 +4,21 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from db import get_db
 from utils.email_utils import generate_activation_code, send_activation_email
+import re
 
 auth_bp = Blueprint("auth", __name__)
 
-
+def validate_password(password):
+        if len(password) < 8:
+            return "Password must be at least 8 characters"
+        if not re.search(r"[A-Z]", password):
+            return "Password must contain at least one uppercase letter"
+        if not re.search(r"[0-9]", password):
+            return "Password must contain at least one number"
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            return "Password must contain at least one special character"
+        return None
+    
 #  POST /api/auth/signup
 @auth_bp.route("/signup", methods=["POST"])
 def signup():
@@ -24,9 +35,10 @@ def signup():
     phone    = data["phone"].strip()
     password = data["password"]
 
-    if len(password) < 6:
-        return jsonify({"error": "Password must be at least 6 characters"}), 400
-
+    
+    pwd_error = validate_password(password)
+    if pwd_error:
+        return jsonify({"error": pwd_error}), 400
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
@@ -44,10 +56,13 @@ def signup():
         VALUES (%s, %s, %s, %s, %s, %s)
     """, (username, email, phone, hashed_pw, code, code_expiry))
     db.commit()
-
+    try:
     # Send activation email (non-blocking failure)
-    email_sent = send_activation_email(email, username, code)
-
+        email_sent = send_activation_email(email, username, code)
+    except Exception as e:
+        current_app.logger.error(f"Failed to send activation email to {email}: {e}")
+        email_sent = False
+        
     cursor.close()
     return jsonify({
         "message": "Registration successful. Check your email for the activation code.",
@@ -146,7 +161,7 @@ def signin():
     data  = request.get_json()
     email = data.get("email", "").strip().lower()
     pwd   = data.get("password", "")
-
+    
     if not email or not pwd:
         return jsonify({"error": "Email and password are required"}), 400
 

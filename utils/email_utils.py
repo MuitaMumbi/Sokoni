@@ -49,7 +49,7 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
         msg.attach(MIMEText(html_body, "html"))
 
         with smtplib.SMTP(current_app.config["MAIL_SERVER"],
-                          current_app.config["MAIL_PORT"]) as server:
+                          current_app.config["MAIL_PORT"], timeout=10) as server:
             server.starttls()
             server.login(
                 current_app.config["MAIL_USERNAME"],
