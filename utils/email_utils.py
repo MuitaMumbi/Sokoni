@@ -57,7 +57,7 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
             )
             server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
 
-        return True
+        return False
     except Exception as e:
         current_app.logger.error(f"[EMAIL] Failed to send to {to_email}: {e}")
         return False
