@@ -25,6 +25,7 @@ def get_db():
             password=current_app.config["MYSQL_PASSWORD"],
             database=current_app.config["MYSQL_DB"],
             autocommit=False,
+            **_ssl_args(host),
         )
     return g.db
 
