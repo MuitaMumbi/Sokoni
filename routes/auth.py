@@ -6,13 +6,24 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from db import get_db
 from utils.email_utils import generate_activation_code, send_activation_email
+import re
 
 auth_bp = Blueprint("auth", __name__)
 
 VALID_ROLES    = {"retailer", "supplier", "admin"}
 VALID_COUNTRIES = {"Kenya", "Tanzania", "Uganda", "Rwanda", "Ethiopia"}
 
-
+def validate_password(password):
+        if len(password) < 8:
+            return "Password must be at least 8 characters"
+        if not re.search(r"[A-Z]", password):
+            return "Password must contain at least one uppercase letter"
+        if not re.search(r"[0-9]", password):
+            return "Password must contain at least one number"
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            return "Password must contain at least one special character"
+        return None
+    
 #  POST /api/auth/signup
 @auth_bp.route("/signup", methods=["POST"])
 def signup():
@@ -66,7 +77,13 @@ def signup():
           country, is_approved, code, code_expiry))
     db.commit()
 
-    email_sent = send_activation_email(email, username, code)
+    # Send activation email (non-blocking failure)
+    try:
+        email_sent = send_activation_email(email, username, code)
+    except Exception as e:
+        current_app.logger.error(f"[SIGNUP] Email sending crashed: {e}")
+        email_sent = False
+
     cursor.close()
 
     msg = ("Registration successful. Your account is pending admin approval after email activation."
@@ -162,7 +179,7 @@ def signin():
     data  = request.get_json()
     email = data.get("email", "").strip().lower()
     pwd   = data.get("password", "")
-
+    
     if not email or not pwd:
         return jsonify({"error": "Email and password are required"}), 400
 
