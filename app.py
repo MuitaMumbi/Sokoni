@@ -38,7 +38,7 @@ def create_app():
         strict_transport_security_max_age=31536000,          # 1 year
         content_security_policy=False,                       # Let mobile app handle CSP
         x_content_type_options=True,
-        x_frame_options="DENY",
+        frame_options="DENY",
         referrer_policy="strict-origin-when-cross-origin",
     )
 

@@ -5,7 +5,7 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from db import get_db
-from utils.email_utils import generate_activation_code, send_activation_email
+from utils.email_utils import send_activation_email, generate_activation_code   
 import re
 
 auth_bp = Blueprint("auth", __name__)
@@ -65,7 +65,7 @@ def signup():
         return jsonify({"error": "Email or username already registered"}), 409
 
     hashed_pw   = generate_password_hash(password)
-    code        = generate_activation_code()
+    code = generate_activation_code()
     code_expiry = datetime.utcnow() + timedelta(minutes=30)
 
     cursor.execute("""
