@@ -78,7 +78,11 @@ def signup():
     db.commit()
 
     # Send activation email (non-blocking failure)
-    email_sent = send_activation_email(email, username, code)
+    try:
+        email_sent = send_activation_email(email, username, code)
+    except Exception as e:
+        current_app.logger.error(f"[SIGNUP] Email sending crashed: {e}")
+        email_sent = False
 
     cursor.close()
 
