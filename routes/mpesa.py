@@ -25,12 +25,36 @@ def get_mpesa_token():
     return response.json().get("access_token")
 
 
-#  Helper: generate Lipa Na Mpesa password 
+#  Helper: generate Lipa Na Mpesa password
 def generate_password(shortcode, passkey):
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     raw       = f"{shortcode}{passkey}{timestamp}"
     password  = base64.b64encode(raw.encode()).decode()
     return password, timestamp
+
+
+COUNTRY_CODES = {
+    "Kenya":    "254",
+    "Tanzania": "255",
+    "Uganda":   "256",
+    "Rwanda":   "250",
+    "Ethiopia": "251",
+}
+
+def normalize_phone(phone: str, country: str = "Kenya") -> str:
+    """Convert any local format to international E.164 (no +)."""
+    phone = str(phone).strip().replace(" ", "").replace("-", "")
+    if phone.startswith("+"):
+        return phone[1:]
+    code = COUNTRY_CODES.get(country, "254")
+    # Already has country code
+    if phone.startswith(code):
+        return phone
+    # Local format: leading 0
+    if phone.startswith("0"):
+        return code + phone[1:]
+    # Bare number — prepend country code
+    return code + phone
 
 
 
@@ -47,19 +71,12 @@ def stk_push():
     if not order_id or not phone:
         return jsonify({"error": "order_id and phone are required"}), 400
 
-    # Normalize phone number: 07... → 2547...
-    phone = str(phone).strip()
-    if phone.startswith("0"):
-        phone = "254" + phone[1:]
-    elif phone.startswith("+"):
-        phone = phone[1:]
-
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
     # Validate order belongs to user and is pending
     cursor.execute("""
-        SELECT order_id, total_amount, status
+        SELECT order_id, total_amount, status, country
         FROM orders WHERE order_id=%s AND user_id=%s
     """, (order_id, user_id))
     order = cursor.fetchone()
@@ -68,31 +85,32 @@ def stk_push():
         cursor.close()
         return jsonify({"error": "Order not found"}), 404
 
-    if order["status"] not in ("pending",):
+    if order["status"] != "pending":
         cursor.close()
         return jsonify({"error": f"Order cannot be paid. Status: {order['status']}"}), 400
 
-    amount    = int(float(order["total_amount"]))  # Must be integer for Mpesa
+    phone     = normalize_phone(phone, order.get("country", "Kenya"))
+    amount    = int(float(order["total_amount"]))
     shortcode = current_app.config["MPESA_SHORTCODE"]
     passkey   = current_app.config["MPESA_PASSKEY"]
     base_url  = current_app.config["MPESA_BASE_URL"]
     callback  = current_app.config["MPESA_CALLBACK_URL"]
 
     try:
-        token              = get_mpesa_token()
+        token               = get_mpesa_token()
         password, timestamp = generate_password(shortcode, passkey)
 
         payload = {
-            "BusinessShortCode": 542542,
+            "BusinessShortCode": shortcode,
             "Password":          password,
             "Timestamp":         timestamp,
             "TransactionType":   "CustomerPayBillOnline",
             "Amount":            amount,
-            "PartyA":            phone,               # Customer phone
-            "PartyB":            542542,            # Paybill number
+            "PartyA":            phone,
+            "PartyB":            shortcode,
             "PhoneNumber":       phone,
             "CallBackURL":       callback,
-            "AccountReference":  "Sokoni-Order-{order_id}",
+            "AccountReference":  f"Sokoni-{order_id}",
             "TransactionDesc":   f"Payment for Sokoni Order #{order_id}",
         }
 
@@ -219,3 +237,86 @@ def stk_query():
     except requests.RequestException as e:
         current_app.logger.error(f"[MPESA QUERY] Error: {e}")
         return jsonify({"error": "Query failed"}), 502
+
+
+#  POST /api/mpesa/stk-push-guest
+#  Initiate STK push for a guest order (no auth required)
+@mpesa_bp.route("/stk-push-guest", methods=["POST"])
+def stk_push_guest():
+    data     = request.get_json() or {}
+    order_id = data.get("order_id")
+    phone    = str(data.get("phone", "")).strip()
+
+    if not order_id or not phone:
+        return jsonify({"error": "order_id and phone are required"}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    # Only allow guest (user_id IS NULL) pending orders
+    cursor.execute(
+        "SELECT order_id, total_amount, status, country FROM orders WHERE order_id=%s AND user_id IS NULL",
+        (order_id,)
+    )
+    order = cursor.fetchone()
+    if not order:
+        cursor.close()
+        return jsonify({"error": "Guest order not found"}), 404
+    if order["status"] != "pending":
+        cursor.close()
+        return jsonify({"error": f"Order already {order['status']}"}), 400
+
+    phone     = normalize_phone(phone, order.get("country", "Kenya"))
+    amount    = int(float(order["total_amount"]))
+    shortcode = current_app.config["MPESA_SHORTCODE"]
+    passkey   = current_app.config["MPESA_PASSKEY"]
+    base_url  = current_app.config["MPESA_BASE_URL"]
+    callback  = current_app.config["MPESA_CALLBACK_URL"]
+
+    try:
+        token               = get_mpesa_token()
+        password, timestamp = generate_password(shortcode, passkey)
+        payload = {
+            "BusinessShortCode": shortcode,
+            "Password":          password,
+            "Timestamp":         timestamp,
+            "TransactionType":   "CustomerPayBillOnline",
+            "Amount":            amount,
+            "PartyA":            phone,
+            "PartyB":            shortcode,
+            "PhoneNumber":       phone,
+            "CallBackURL":       callback,
+            "AccountReference":  f"Sokoni-{order_id}",
+            "TransactionDesc":   f"Payment for Sokoni Order #{order_id}",
+        }
+        resp = requests.post(
+            f"{base_url}/mpesa/stkpush/v1/processrequest",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        mpesa_resp = resp.json()
+    except requests.RequestException as e:
+        current_app.logger.error(f"[MPESA GUEST] STK error: {e}")
+        cursor.close()
+        return jsonify({"error": "Failed to initiate payment. Please try again."}), 502
+
+    if mpesa_resp.get("ResponseCode") == "0":
+        checkout_id = mpesa_resp.get("CheckoutRequestID")
+        cursor.execute(
+            "UPDATE orders SET mpesa_checkout_id=%s WHERE order_id=%s",
+            (checkout_id, order_id)
+        )
+        db.commit()
+        cursor.close()
+        return jsonify({
+            "message":             "STK push sent. Check your phone for the M-Pesa prompt.",
+            "checkout_request_id": checkout_id,
+        }), 200
+    else:
+        cursor.close()
+        return jsonify({
+            "error":       "M-Pesa request failed",
+            "mpesa_error": mpesa_resp.get("errorMessage", "Unknown error"),
+        }), 400

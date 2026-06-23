@@ -1,19 +1,30 @@
+import os
 import mysql.connector
 from flask import current_app, g
+
+
+def _ssl_args(host: str) -> dict:
+    """Return SSL kwargs for mysql.connector based on environment."""
+    if host in ("localhost", "127.0.0.1"):
+        return {}
+    ca = os.getenv("MYSQL_SSL_CA", "")
+    if ca:
+        return {"ssl_ca": ca, "ssl_verify_cert": True}
+    # Remote host (e.g. Aiven) — encrypt but skip cert verification
+    return {"ssl_verify_cert": False, "ssl_verify_identity": False}
 
 
 def get_db():
     """Get a database connection, reusing one per request."""
     if "db" not in g:
+        host = current_app.config["MYSQL_HOST"]
         g.db = mysql.connector.connect(
-            host=current_app.config["MYSQL_HOST"],
+            host=host,
             port=current_app.config["MYSQL_PORT"],
             user=current_app.config["MYSQL_USER"],
             password=current_app.config["MYSQL_PASSWORD"],
             database=current_app.config["MYSQL_DB"],
             autocommit=False,
-            ssl_ca="ca.pem",      
-            ssl_verify_cert=True 
         )
     return g.db
 
@@ -26,11 +37,13 @@ def close_db(e=None):
 
 def init_db():
     """Create all required tables if they don't exist."""
+    host = current_app.config["MYSQL_HOST"]
     conn = mysql.connector.connect(
-        host=current_app.config["MYSQL_HOST"],
+        host=host,
         port=current_app.config["MYSQL_PORT"],
         user=current_app.config["MYSQL_USER"],
         password=current_app.config["MYSQL_PASSWORD"],
+        **_ssl_args(host),
     )
     cursor = conn.cursor()
 
@@ -110,7 +123,37 @@ def init_db():
         )
     """)
 
+    # Promo codes table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            promo_id         INT AUTO_INCREMENT PRIMARY KEY,
+            code             VARCHAR(50)  NOT NULL UNIQUE,
+            type             ENUM('percent','flat') NOT NULL DEFAULT 'percent',
+            value            DECIMAL(10,2) NOT NULL,
+            min_order_amount DECIMAL(10,2) DEFAULT 0,
+            max_uses         INT DEFAULT NULL,
+            used_count       INT DEFAULT 0,
+            expires_at       DATETIME DEFAULT NULL,
+            is_active        TINYINT(1) DEFAULT 1,
+            created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Migrate orders table — add promo / discount columns if missing
+    for col, definition in [
+        ("promo_code",      "VARCHAR(50) DEFAULT NULL"),
+        ("discount_amount", "DECIMAL(10,2) DEFAULT 0"),
+    ]:
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME   = 'orders'
+              AND COLUMN_NAME  = %s
+        """, (col,))
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")
+
     conn.commit()
     cursor.close()
     conn.close()
-    print("✅  Sokoni database and tables initialized.")
+    print("Sokoni database and tables initialized.")

@@ -30,6 +30,7 @@ class Config:
     MYSQL_USER = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB = os.getenv("MYSQL_DB", "sokoni_db")
+    MYSQL_SSL_CA = os.getenv("MYSQL_SSL_CA", "")
 
     # CORS
     # In production set to your app's domain e.g. "https://sokoni.co.ke"
