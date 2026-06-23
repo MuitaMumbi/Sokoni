@@ -48,16 +48,17 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
 
         msg.attach(MIMEText(html_body, "html"))
 
-        # with smtplib.SMTP(current_app.config["MAIL_SERVER"],
-        #                   current_app.config["MAIL_PORT"], timeout=10) as server:
-        #     server.starttls()
-        #     server.login(
-        #         current_app.config["MAIL_USERNAME"],
-        #         current_app.config["MAIL_PASSWORD"],
-        #     )
-        #     server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
+        with smtplib.SMTP(current_app.config["MAIL_SERVER"],
+                          current_app.config["MAIL_PORT"], timeout=10) as server:
+            server.starttls()
+            server.login(
+                current_app.config["MAIL_USERNAME"],
+                current_app.config["MAIL_PASSWORD"],
+            )
+            server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
 
-        # return False
+        current_app.logger.info(f"[EMAIL] Activation email sent to {to_email}")
+        return True
     except Exception as e:
         current_app.logger.error(f"[EMAIL] Failed to send to {to_email}: {e}")
         return False

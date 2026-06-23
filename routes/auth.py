@@ -62,12 +62,29 @@ def signup():
 
     cursor.execute("SELECT user_id FROM users WHERE email=%s OR username=%s", (email, username))
     if cursor.fetchone():
+        cursor.close()
         return jsonify({"error": "Email or username already registered"}), 409
 
     hashed_pw   = generate_password_hash(password)
     code = generate_activation_code()
     code_expiry = datetime.utcnow() + timedelta(minutes=30)
 
+    # Send activation email BEFORE saving to database
+    try:
+        email_sent = send_activation_email(email, username, code)
+        if not email_sent:
+            cursor.close()
+            return jsonify({
+                "error": "Failed to send activation email. Please check your email address or try again later."
+            }), 500
+    except Exception as e:
+        current_app.logger.error(f"[SIGNUP] Email sending crashed: {e}")
+        cursor.close()
+        return jsonify({
+            "error": "Failed to send activation email. Please try again later."
+        }), 500
+
+    # Only save user to database after email is successfully sent
     cursor.execute("""
         INSERT INTO users
             (username, email, phone, password, role, business_name, country,
@@ -76,14 +93,6 @@ def signup():
     """, (username, email, phone, hashed_pw, role, business_name or None,
           country, is_approved, code, code_expiry))
     db.commit()
-
-    # Send activation email (non-blocking failure)
-    try:
-        email_sent = send_activation_email(email, username, code)
-    except Exception as e:
-        current_app.logger.error(f"[SIGNUP] Email sending crashed: {e}")
-        email_sent = False
-
     cursor.close()
 
     msg = ("Registration successful. Your account is pending admin approval after email activation."
@@ -92,7 +101,6 @@ def signup():
 
     return jsonify({
         "message": msg,
-        "email_sent": email_sent,
         "activation_code_dev": code if current_app.config["DEBUG"] else None,
     }), 201
 
