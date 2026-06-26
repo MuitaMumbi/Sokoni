@@ -165,6 +165,11 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
+    # Render assigns a dynamic port via environment variables. Default to 5000 for localhost.
+    port = int(os.environ.get("PORT", 5000))
+    
     # Never run with debug=True in production
     debug_mode = app.config.get("DEBUG", False)
-    app.run(debug=debug_mode, port=5000)
+    
+    # host="0.0.0.0" allows Render's network to route public traffic to your app
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
