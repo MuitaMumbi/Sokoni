@@ -4,7 +4,12 @@ import string
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from flask import current_app
+import os
 
+MAIL_SERVER    = "smtp.gmail.com"
+MAIL_PORT     = 587
+MAIL_USERNAME = os.getenv("EMAIL_USER")    
+MAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 def generate_activation_code(length=6):
     """Generate a random numeric activation code."""
@@ -49,16 +54,27 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
         msg.attach(MIMEText(html_body, "html"))
 
         with smtplib.SMTP(current_app.config["MAIL_SERVER"],
-                          current_app.config["MAIL_PORT"], timeout=10) as server:
-            server.starttls()
-            server.login(
-                current_app.config["MAIL_USERNAME"],
-                current_app.config["MAIL_PASSWORD"],
-            )
-            server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
+                  current_app.config["MAIL_PORT"], timeout=10) as server:
+          # Enable debug output in logs for SMTP session (can be noisy)
+          server.set_debuglevel(0)
+          server.ehlo()
+          server.starttls() # upgrades connection to encrypted
+          server.ehlo() # re-introduces after encryption, required by some servers
+          server.login(
+            current_app.config["MAIL_USERNAME"],
+            current_app.config["MAIL_PASSWORD"],
+          )
+          send_result = server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
+
+        # sendmail returns an empty dict on success, or a dict of failed recipients
+        if send_result:
+          current_app.logger.error(f"[EMAIL] sendmail reported failures for {to_email}: {send_result}")
+          return False
 
         current_app.logger.info(f"[EMAIL] Activation email sent to {to_email}")
         return True
     except Exception as e:
-        current_app.logger.error(f"[EMAIL] Failed to send to {to_email}: {e}")
+        import traceback
+        current_app.logger.error(f"[EMAIL] Failed to send to {to_email}: {type(e).__name__} - {e}")
+        current_app.logger.error(traceback.format_exc())
         return False

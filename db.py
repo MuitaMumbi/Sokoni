@@ -64,7 +64,9 @@ def init_db():
             activation_code VARCHAR(6),
             activation_expires DATETIME,
             role          ENUM('customer','admin') NOT NULL DEFAULT 'customer',
-            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            business_name VARCHAR(255),
+            country       VARCHAR(100)
         )
     """)
 
@@ -137,6 +139,22 @@ def init_db():
             expires_at       DATETIME DEFAULT NULL,
             is_active        TINYINT(1) DEFAULT 1,
             created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_registrations (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(255),
+            email VARCHAR(255) UNIQUE,
+            phone VARCHAR(20),
+            password VARCHAR(255),
+            role VARCHAR(50),
+            business_name VARCHAR(255),
+            country VARCHAR(100),
+            is_approved TINYINT(1),
+            activation_code VARCHAR(10),
+            activation_expires DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

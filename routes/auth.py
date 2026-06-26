@@ -7,8 +7,13 @@ from datetime import datetime, timedelta
 from db import get_db
 from utils.email_utils import send_activation_email, generate_activation_code   
 import re
+from utils.validators import (
+    is_valid_email, is_valid_phone, is_valid_username, is_strong_password, sanitize_string
+)
+import logging
 
 auth_bp = Blueprint("auth", __name__)
+logger  = logging.getLogger("sokoni") #Your logs are separated from Flask's own logs, SQLAlchemy logs, library warnings etc. You can control your app's log level independently
 
 VALID_ROLES    = {"retailer", "supplier", "admin"}
 VALID_COUNTRIES = {"Kenya", "Tanzania", "Uganda", "Rwanda", "Ethiopia"}
@@ -23,53 +28,69 @@ def validate_password(password):
         if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
             return "Password must contain at least one special character"
         return None
-    
+
+
+
+
+def generate_activation_code():
+    return str(random.randint(100000, 999999))
+
+
+# ─────────────────────────────────────────────
 #  POST /api/auth/signup
+# ─────────────────────────────────────────────
 @auth_bp.route("/signup", methods=["POST"])
 def signup():
-    data     = request.get_json()
-    required = ["username", "email", "phone", "password"]
+    data = request.get_json()
 
-    missing = [f for f in required if not data.get(f)]
-    if missing:
-        return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
-
-    username      = data["username"].strip()
-    email         = data["email"].strip().lower()
-    phone         = data["phone"].strip()
-    password      = data["password"]
+    username      = data.get("username", "").strip()
+    email         = data.get("email", "").strip().lower()
+    phone         = data.get("phone", "").strip()
+    password      = data.get("password", "")
     role          = data.get("role", "retailer").strip().lower()
-    business_name = data.get("business_name", "").strip()
-    country       = data.get("country", "Kenya").strip()
+    business_name = data.get("business_name", "").strip() or None
+    country       = data.get("country", "").strip()
 
-    if len(password) < 6:
-        return jsonify({"error": "Password must be at least 6 characters"}), 400
-
-    if role not in VALID_ROLES:
-        return jsonify({"error": f"role must be one of: {', '.join(VALID_ROLES)}"}), 400
-
-    if country not in VALID_COUNTRIES:
-        return jsonify({"error": f"country must be one of: {', '.join(VALID_COUNTRIES)}"}), 400
+    # ── Basic validation ──────────────────────────────────────────
+    if not all([username, email, password, role]):
+        return jsonify({"error": "username, email, password and role are required"}), 400
+    pw_error = validate_password(password)
+    if pw_error:
+        return jsonify({"error": pw_error}), 400
 
     if role == "supplier" and not business_name:
         return jsonify({"error": "business_name is required for suppliers"}), 400
 
-    # Suppliers require admin approval; retailers and admins are auto-approved
-    is_approved = 0 if role == "supplier" else 1
-
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("SELECT user_id FROM users WHERE email=%s OR username=%s", (email, username))
+    # ── Block if email/username already in users OR pending ───────
+    cursor.execute(
+        "SELECT 1 FROM users WHERE email=%s OR username=%s",
+        (email, username)
+    )
     if cursor.fetchone():
         cursor.close()
         return jsonify({"error": "Email or username already registered"}), 409
 
-    hashed_pw   = generate_password_hash(password)
-    code = generate_activation_code()
-    code_expiry = datetime.utcnow() + timedelta(minutes=30)
+    cursor.execute(
+        "SELECT 1 FROM pending_registrations WHERE email=%s OR username=%s",
+        (email, username)
+    )
+    if cursor.fetchone():
+        cursor.close()
+        return jsonify({
+            "error": "A pending registration already exists for this email or username. "
+                     "Check your inbox or request a new code."
+        }), 409
 
-    # Send activation email BEFORE saving to database
+    # ── Prepare credentials ───────────────────────────────────────
+    hashed_pw   = generate_password_hash(password)
+    code        = generate_activation_code()
+    code_expiry = datetime.utcnow() + timedelta(minutes=30)
+    is_approved = 0 if role == "supplier" else 1
+
+    # ── Send email FIRST — do not touch users table yet ──────────
     try:
         email_sent = send_activation_email(email, username, code)
         if not email_sent:
@@ -84,20 +105,32 @@ def signup():
             "error": "Failed to send activation email. Please try again later."
         }), 500
 
-    # Only save user to database after email is successfully sent
+    # ── Save to pending_registrations, NOT users ──────────────────
     cursor.execute("""
-        INSERT INTO users
-            (username, email, phone, password, role, business_name, country,
-             is_approved, activation_code, activation_expires)
+        INSERT INTO pending_registrations
+            (username, email, phone, password, role, business_name,
+             country, is_approved, activation_code, activation_expires)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (username, email, phone, hashed_pw, role, business_name or None,
+        ON DUPLICATE KEY UPDATE
+            username           = VALUES(username),
+            phone              = VALUES(phone),
+            password           = VALUES(password),
+            role               = VALUES(role),
+            business_name      = VALUES(business_name),
+            country            = VALUES(country),
+            is_approved        = VALUES(is_approved),
+            activation_code    = VALUES(activation_code),
+            activation_expires = VALUES(activation_expires)
+    """, (username, email, phone, hashed_pw, role, business_name,
           country, is_approved, code, code_expiry))
     db.commit()
     cursor.close()
 
-    msg = ("Registration successful. Your account is pending admin approval after email activation."
-           if role == "supplier"
-           else "Registration successful. Check your email for the activation code.")
+    msg = (
+        "Registration successful. Verify your email, then wait for admin approval."
+        if role == "supplier"
+        else "Registration successful. Check your email for the activation code."
+    )
 
     return jsonify({
         "message": msg,
@@ -105,7 +138,9 @@ def signup():
     }), 201
 
 
+# ─────────────────────────────────────────────
 #  POST /api/auth/activate
+# ─────────────────────────────────────────────
 @auth_bp.route("/activate", methods=["POST"])
 def activate():
     data  = request.get_json()
@@ -118,32 +153,58 @@ def activate():
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
+    # ── Check pending_registrations, not users ────────────────────
     cursor.execute("""
-        SELECT user_id, activation_code, activation_expires, is_active
-        FROM users WHERE email=%s
+        SELECT * FROM pending_registrations WHERE email=%s
     """, (email,))
-    user = cursor.fetchone()
+    pending = cursor.fetchone()
 
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    if user["is_active"]:
-        return jsonify({"message": "Account already activated"}), 200
-    if user["activation_code"] != code:
-        return jsonify({"error": "Invalid activation code"}), 400
-    if datetime.utcnow() > user["activation_expires"]:
-        return jsonify({"error": "Activation code has expired. Request a new one."}), 400
+    if not pending:
+        # Maybe they already activated — check users table
+        cursor.execute("SELECT 1 FROM users WHERE email=%s", (email,))
+        if cursor.fetchone():
+            cursor.close()
+            return jsonify({"message": "Account already activated. You can sign in."}), 200
+        cursor.close()
+        return jsonify({"error": "No pending registration found for this email."}), 404
 
+    if pending["activation_code"] != code:
+        cursor.close()
+        return jsonify({"error": "Invalid activation code."}), 400
+
+    if datetime.utcnow() > pending["activation_expires"]:
+        cursor.close()
+        return jsonify({
+            "error": "Activation code has expired. Request a new one."
+        }), 400
+
+    # ── Code is valid — now insert into users ─────────────────────
     cursor.execute("""
-        UPDATE users SET is_active=1, activation_code=NULL, activation_expires=NULL
-        WHERE user_id=%s
-    """, (user["user_id"],))
+        INSERT INTO users
+            (username, email, phone, password, role, business_name,
+             country, is_approved, is_active)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
+    """, (
+        pending["username"], pending["email"], pending["phone"],
+        pending["password"], pending["role"], pending["business_name"],
+        pending["country"], pending["is_approved"]
+    ))
+
+    # ── Clean up pending record ───────────────────────────────────
+    cursor.execute(
+        "DELETE FROM pending_registrations WHERE email=%s", (email,)
+    )
     db.commit()
     cursor.close()
 
-    return jsonify({"message": "Account activated successfully. You can now sign in."}), 200
+    return jsonify({
+        "message": "Account activated successfully. You can now sign in."
+    }), 200
 
 
+# ─────────────────────────────────────────────
 #  POST /api/auth/resend-code
+# ─────────────────────────────────────────────
 @auth_bp.route("/resend-code", methods=["POST"])
 def resend_code():
     data  = request.get_json()
@@ -155,23 +216,37 @@ def resend_code():
     db     = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("SELECT user_id, username, is_active FROM users WHERE email=%s", (email,))
-    user = cursor.fetchone()
+    cursor.execute(
+        "SELECT username FROM pending_registrations WHERE email=%s", (email,)
+    )
+    pending = cursor.fetchone()
 
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    if user["is_active"]:
-        return jsonify({"message": "Account already activated"}), 200
+    if not pending:
+        cursor.execute("SELECT 1 FROM users WHERE email=%s", (email,))
+        if cursor.fetchone():
+            cursor.close()
+            return jsonify({"message": "Account already activated. You can sign in."}), 200
+        cursor.close()
+        return jsonify({"error": "No pending registration found for this email."}), 404
 
     code        = generate_activation_code()
     code_expiry = datetime.utcnow() + timedelta(minutes=30)
 
+    # ── Update code in pending_registrations ──────────────────────
     cursor.execute("""
-        UPDATE users SET activation_code=%s, activation_expires=%s WHERE user_id=%s
-    """, (code, code_expiry, user["user_id"]))
+        UPDATE pending_registrations
+        SET activation_code=%s, activation_expires=%s
+        WHERE email=%s
+    """, (code, code_expiry, email))
     db.commit()
 
-    email_sent = send_activation_email(email, user["username"], code)
+    # ── Send email AFTER updating the record ─────────────────────
+    try:
+        email_sent = send_activation_email(email, pending["username"], code)
+    except Exception as e:
+        current_app.logger.error(f"[RESEND] Email sending crashed: {e}")
+        email_sent = False
+
     cursor.close()
 
     return jsonify({
