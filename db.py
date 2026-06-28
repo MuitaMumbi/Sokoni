@@ -7,11 +7,15 @@ def _ssl_args(host: str) -> dict:
     """Return SSL kwargs for mysql.connector based on environment."""
     if host in ("localhost", "127.0.0.1"):
         return {}
+    # Check env var first, then fall back to ca.pem in project root
     ca = os.getenv("MYSQL_SSL_CA", "")
+    if not ca:
+        local_ca = os.path.join(os.path.dirname(__file__), "ca.pem")
+        if os.path.exists(local_ca):
+            ca = local_ca
     if ca:
         return {"ssl_ca": ca, "ssl_verify_cert": True}
-    # Remote host without CA file — connect without SSL
-    return {}
+    return {"ssl_verify_cert": False}
 
 
 def get_db():
@@ -38,35 +42,55 @@ def close_db(e=None):
 
 def init_db():
     """Create all required tables if they don't exist."""
-    host = current_app.config["MYSQL_HOST"]
+    host   = current_app.config["MYSQL_HOST"]
+    db     = current_app.config["MYSQL_DB"]
+    is_local = host in ("localhost", "127.0.0.1")
+
     conn = mysql.connector.connect(
         host=host,
         port=current_app.config["MYSQL_PORT"],
         user=current_app.config["MYSQL_USER"],
         password=current_app.config["MYSQL_PASSWORD"],
+        database=None if is_local else db,
         **_ssl_args(host),
     )
     cursor = conn.cursor()
 
-    # Create database
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {current_app.config['MYSQL_DB']}")
-    cursor.execute(f"USE {current_app.config['MYSQL_DB']}")
+    if is_local:
+        # Local dev: create the database if it doesn't exist
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
+        cursor.execute(f"USE {db}")
+    else:
+        # Managed host (Aiven etc.): database already exists, just select it
+        cursor.execute(f"USE {db}")
 
     # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id       INT AUTO_INCREMENT PRIMARY KEY,
-            username      VARCHAR(100) NOT NULL UNIQUE,
-            email         VARCHAR(150) NOT NULL UNIQUE,
-            phone         VARCHAR(20)  NOT NULL,
-            password      VARCHAR(255) NOT NULL,
-            is_active     TINYINT(1)   NOT NULL DEFAULT 0,
-            activation_code VARCHAR(6),
+            user_id            INT AUTO_INCREMENT PRIMARY KEY,
+            username           VARCHAR(100) NOT NULL UNIQUE,
+            email              VARCHAR(150) NOT NULL UNIQUE,
+            phone              VARCHAR(20)  NOT NULL,
+            password           VARCHAR(255) NOT NULL,
+            is_active          TINYINT(1)   NOT NULL DEFAULT 0,
+            is_approved        TINYINT(1)   NOT NULL DEFAULT 0,
+            activation_code    VARCHAR(6),
             activation_expires DATETIME,
-            role          ENUM('customer','admin') NOT NULL DEFAULT 'customer',
-            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            business_name VARCHAR(255),
-            country       VARCHAR(100)
+            role               ENUM('customer','admin','supplier','retailer') NOT NULL DEFAULT 'retailer',
+            business_name      VARCHAR(200),
+            country            VARCHAR(100) DEFAULT 'Kenya',
+            created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Categories table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            category_id INT AUTO_INCREMENT PRIMARY KEY,
+            name        VARCHAR(100) NOT NULL,
+            slug        VARCHAR(100) NOT NULL UNIQUE,
+            parent_id   INT DEFAULT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -79,6 +103,10 @@ def init_db():
             product_desc  TEXT,
             product_photo VARCHAR(255),
             stock         INT NOT NULL DEFAULT 0,
+            min_order_qty INT NOT NULL DEFAULT 1,
+            unit          VARCHAR(50) DEFAULT 'piece',
+            country       VARCHAR(100) DEFAULT 'Kenya',
+            category_id   INT,
             created_by    INT,
             created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
@@ -102,14 +130,22 @@ def init_db():
     # Orders table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
-            order_id      INT AUTO_INCREMENT PRIMARY KEY,
-            user_id       INT NOT NULL,
-            total_amount  DECIMAL(10,2) NOT NULL,
-            status        ENUM('pending','paid','shipped','delivered','cancelled') NOT NULL DEFAULT 'pending',
+            order_id         INT AUTO_INCREMENT PRIMARY KEY,
+            user_id          INT,
+            total_amount     DECIMAL(10,2) NOT NULL,
+            discount_amount  DECIMAL(10,2) DEFAULT 0,
+            promo_code       VARCHAR(50) DEFAULT NULL,
+            status           ENUM('pending','paid','shipped','delivered','cancelled') NOT NULL DEFAULT 'pending',
+            delivery_address VARCHAR(255),
+            delivery_city    VARCHAR(100),
+            country          VARCHAR(100) DEFAULT 'Kenya',
+            buyer_name       VARCHAR(200),
+            buyer_phone      VARCHAR(30),
+            buyer_email      VARCHAR(150),
             mpesa_checkout_id VARCHAR(100),
-            mpesa_receipt   VARCHAR(100),
-            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            mpesa_receipt    VARCHAR(100),
+            created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
         )
     """)
 
@@ -141,36 +177,40 @@ def init_db():
             created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pending_registrations (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(255),
-            email VARCHAR(255) UNIQUE,
-            phone VARCHAR(20),
-            password VARCHAR(255),
-            role VARCHAR(50),
-            business_name VARCHAR(255),
-            country VARCHAR(100),
-            is_approved TINYINT(1),
-            activation_code VARCHAR(10),
-            activation_expires DATETIME,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
 
-    # Migrate orders table — add promo / discount columns if missing
-    for col, definition in [
-        ("promo_code",      "VARCHAR(50) DEFAULT NULL"),
-        ("discount_amount", "DECIMAL(10,2) DEFAULT 0"),
-    ]:
+    # Column migrations — add any missing columns to existing tables
+    migrations = [
+        ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("users",    "business_name",       "VARCHAR(200) DEFAULT NULL"),
+        ("users",    "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("products", "min_order_qty",       "INT NOT NULL DEFAULT 1"),
+        ("products", "unit",                "VARCHAR(50) DEFAULT 'piece'"),
+        ("products", "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("products", "category_id",         "INT DEFAULT NULL"),
+        ("orders",   "promo_code",          "VARCHAR(50) DEFAULT NULL"),
+        ("orders",   "discount_amount",     "DECIMAL(10,2) DEFAULT 0"),
+        ("orders",   "delivery_address",    "VARCHAR(255) DEFAULT NULL"),
+        ("orders",   "delivery_city",       "VARCHAR(100) DEFAULT NULL"),
+        ("orders",   "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("orders",   "buyer_name",          "VARCHAR(200) DEFAULT NULL"),
+        ("orders",   "buyer_phone",         "VARCHAR(30) DEFAULT NULL"),
+        ("orders",   "buyer_email",         "VARCHAR(150) DEFAULT NULL"),
+    ]
+    for table, col, definition in migrations:
         cursor.execute("""
             SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME   = 'orders'
+              AND TABLE_NAME   = %s
               AND COLUMN_NAME  = %s
-        """, (col,))
+        """, (table, col))
         if cursor.fetchone()[0] == 0:
-            cursor.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")
+            cursor.execute(f"ALTER TABLE `{table}` ADD COLUMN `{col}` {definition}")
+
+    # Ensure role ENUM includes all roles
+    cursor.execute("""
+        ALTER TABLE users MODIFY COLUMN role
+        ENUM('customer','admin','supplier','retailer') NOT NULL DEFAULT 'retailer'
+    """)
 
     conn.commit()
     cursor.close()

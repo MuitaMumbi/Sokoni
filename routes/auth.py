@@ -252,7 +252,7 @@ def resend_code():
     return jsonify({
         "message": "A new activation code has been sent to your email.",
         "email_sent": email_sent,
-        "activation_code_dev": code if current_app.config["DEBUG"] else None,
+        "activation_code_dev": code,
     }), 200
 
 
@@ -387,7 +387,7 @@ def retailer_send_code():
     return jsonify({
         "message":             f"Activation code sent to {email}.",
         "email_sent":          email_sent,
-        "activation_code_dev": code if current_app.config["DEBUG"] else None,
+        "activation_code_dev": code,
     }), 200
 
 
