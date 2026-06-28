@@ -10,7 +10,6 @@ from flask_talisman import Talisman
 from config import Config
 from db import init_db
 from flask_cors import CORS
-
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
 
@@ -135,6 +134,7 @@ def create_app():
     from routes.cart     import cart_bp
     from routes.orders   import orders_bp
     from routes.mpesa    import mpesa_bp
+    from routes.admin import admin_bp
 
     # Stricter limits on auth endpoints to prevent brute force
     limiter.limit("10 per minute")(auth_bp)
@@ -144,6 +144,7 @@ def create_app():
     app.register_blueprint(cart_bp,     url_prefix="/api/cart")
     app.register_blueprint(orders_bp,   url_prefix="/api/orders")
     app.register_blueprint(mpesa_bp,    url_prefix="/api/mpesa")
+    app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
     # Initialize DB 
     with app.app_context():

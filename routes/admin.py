@@ -172,3 +172,56 @@ def delete_user(user_id):
     cursor.close()
 
     return jsonify({"message": "User deleted"}), 200
+
+#  GET /api/admin/suppliers  (admin — list pending suppliers)
+@admin_bp.route("/suppliers", methods=["GET"])
+@jwt_required()
+def list_suppliers():
+    claims = get_jwt()
+    if claims.get("role") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+    approved = request.args.get("approved")
+
+    if approved == "0":
+        cursor.execute("""
+            SELECT user_id, username, email, phone, business_name, country, created_at
+            FROM users WHERE role='supplier' AND is_approved=0
+        """)
+    else:
+        cursor.execute("""
+            SELECT user_id, username, email, phone, business_name, country, is_approved, created_at
+            FROM users WHERE role='supplier'
+        """)
+
+    suppliers = cursor.fetchall()
+    cursor.close()
+    return jsonify({"suppliers": suppliers}), 200
+
+
+#  PATCH /api/admin/suppliers/<id>/approve  (admin)
+@admin_bp.route("/suppliers/<int:user_id>/approve", methods=["PATCH"])
+@jwt_required()
+def approve_supplier(user_id):
+    claims = get_jwt()
+    if claims.get("role") != "admin":
+        return jsonify({"error": "Admin access required"}), 403
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT user_id, role FROM users WHERE user_id=%s", (user_id,))
+    user = cursor.fetchone()
+
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user["role"] != "supplier":
+        return jsonify({"error": "User is not a supplier"}), 400
+
+    cursor.execute("UPDATE users SET is_approved=1 WHERE user_id=%s", (user_id,))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Supplier approved successfully"}), 200

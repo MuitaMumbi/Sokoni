@@ -79,7 +79,9 @@ def init_db():
             role               ENUM('customer','admin','supplier','retailer') NOT NULL DEFAULT 'retailer',
             business_name      VARCHAR(200),
             country            VARCHAR(100) DEFAULT 'Kenya',
-            created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reset_token VARCHAR(64) DEFAULT NULL,
+            reset_token_expires DATETIME DEFAULT NULL
         )
     """)
 
