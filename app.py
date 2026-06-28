@@ -74,7 +74,7 @@ def create_app():
         db  = get_db()
         cursor = db.cursor(dictionary=True)
         cursor.execute("SELECT jti FROM token_blocklist WHERE jti=%s", (jti,))
-        token = cursor.fetchone() is not None
+        token = cursor.fetchone()
         cursor.close()
         return token is not None
 
