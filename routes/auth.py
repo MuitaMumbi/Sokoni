@@ -492,7 +492,7 @@ def check_email():
 @jwt_required()
 def change_password():
     data         = request.get_json()
-    password     = data.get("current_password", "")
+    password     = data.get("password", "")
     new_pwd      = data.get("new_password", "")
 
     if not password or not new_pwd:
