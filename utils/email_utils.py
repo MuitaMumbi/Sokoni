@@ -3,8 +3,10 @@ import random
 import string
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import resend
 from flask import current_app
 import os
+
 
 MAIL_SERVER    = "smtp.gmail.com"
 MAIL_PORT     = 587
@@ -53,25 +55,20 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
 
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(current_app.config["MAIL_SERVER"],
-                  current_app.config["MAIL_PORT"], timeout=10) as server:
-          # Enable debug output in logs for SMTP session (can be noisy)
-          server.set_debuglevel(0)
-          server.ehlo()
-          server.starttls() # upgrades connection to encrypted
-          server.ehlo() # re-introduces after encryption, required by some servers
-          server.login(
-            current_app.config["MAIL_USERNAME"],
-            current_app.config["MAIL_PASSWORD"],
-          )
-          send_result = server.sendmail(current_app.config["MAIL_SENDER"], to_email, msg.as_string())
+        resend.api_key = current_app.config["RESEND_API_KEY"]
 
-        # sendmail returns an empty dict on success, or a dict of failed recipients
-        if send_result:
-          current_app.logger.error(f"[EMAIL] sendmail reported failures for {to_email}: {send_result}")
-          return False
+        response = resend.Emails.send({
+            "from": "Sokoni <onboarding@resend.dev>",
+            "to": to_email,
+            "subject": "Sokoni – Verify Your Account",
+            "html": html_body
+        })
 
-        current_app.logger.info(f"[EMAIL] Activation email sent to {to_email}")
+        if not response.get("id"):
+            current_app.logger.error(f"[EMAIL] Resend returned no ID for {to_email}: {response}")
+            return False
+
+        current_app.logger.info(f"[EMAIL] Activation email sent to {to_email}, id: {response['id']}")
         return True
     except Exception as e:
         import traceback

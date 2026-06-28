@@ -43,6 +43,7 @@ class Config:
     MAIL_PASSWORD = os.getenv("MAIL_PASSWORD")
     MAIL_USE_TLS = True
     MAIL_SENDER = os.getenv("MAIL_SENDER", "mumbimuita01@gmail.com")
+    RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
     # File Uploads
     UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads/products")
