@@ -10,6 +10,7 @@ from flask_talisman import Talisman
 from config import Config
 from db import init_db, get_db
 from flask_cors import CORS
+
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
 
@@ -27,6 +28,7 @@ logger.addHandler(file_handler)
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+    app.config["JWT_DECODE_ALGORITHMS"] = ["HS256"]
     # HTTPS enforcement (Talisman) 
     # Forces HTTPS and sets strict security headers on every response
     # Disable in local dev by setting FORCE_HTTPS=False in .env

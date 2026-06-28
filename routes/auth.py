@@ -1,5 +1,6 @@
 import random
 import string
+import uuid
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -291,7 +292,7 @@ def signin():
 
     token = create_access_token(
         identity=str(user["user_id"]),
-        additional_claims={"role": user["role"]}
+        additional_claims={"role": user["role"], "jti": str(uuid.uuid4())}
     )
 
     return jsonify({
