@@ -75,26 +75,35 @@ def send_activation_email(to_email: str, username: str, code: str) -> bool:
         current_app.logger.error(f"[EMAIL] Failed to send to {to_email}: {type(e).__name__} - {e}")
         current_app.logger.error(traceback.format_exc())
         return False
+    
 def send_reset_email(to_email: str, username: str, token: str) -> bool:
-    """Send a password reset email with the reset token."""
+    """Send a password reset email with the reset link."""
+
+    reset_url = f"http://localhost:5173/reset-password?token={token}&email={to_email}"
+
     try:
         html_body = f"""
         <!DOCTYPE html>
         <html>
         <body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
           <div style="max-width:500px;margin:auto;background:#fff;border-radius:10px;padding:30px;">
-            <h2 style="color:#2e7d32;">Sokoni Password Reset 🔑</h2>
+            <h2 style="color:#0A2E6E;">Sokoni Password Reset 🔑</h2>
             <p>Hi <strong>{username}</strong>,</p>
-            <p>You requested to reset your password. Use the code below:</p>
+            <p>You requested to reset your password. Click the button below:</p>
             <div style="text-align:center;margin:30px 0;">
-              <span style="font-size:24px;font-weight:bold;letter-spacing:6px;color:#2e7d32;
-                           background:#e8f5e9;padding:15px 25px;border-radius:8px;">
-                {token}
-              </span>
+              <a href="{reset_url}"
+                 style="background:#F5C800;color:#0A2E6E;padding:14px 28px;border-radius:8px;
+                        font-weight:bold;font-size:15px;text-decoration:none;display:inline-block;">
+                Reset My Password
+              </a>
             </div>
             <p style="color:#757575;font-size:13px;">
-              This code expires in <strong>30 minutes</strong>.<br>
+              This link expires in <strong>30 minutes</strong>.<br>
               If you did not request a password reset, please ignore this email.
+            </p>
+            <p style="color:#9e9e9e;font-size:12px;">
+              Or copy this link into your browser:<br>
+              <a href="{reset_url}" style="color:#2B6BE0;">{reset_url}</a>
             </p>
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
             <p style="color:#9e9e9e;font-size:12px;text-align:center;">

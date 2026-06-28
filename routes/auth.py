@@ -38,9 +38,7 @@ def generate_activation_code():
     return str(random.randint(100000, 999999))
 
 
-# ─────────────────────────────────────────────
 #  POST /api/auth/signup
-# ─────────────────────────────────────────────
 @auth_bp.route("/signup", methods=["POST"])
 def signup():
     data = request.get_json()
@@ -144,9 +142,8 @@ def signup():
     }), 201
 
 
-# ─────────────────────────────────────────────
 #  POST /api/auth/activate
-# ─────────────────────────────────────────────
+
 @auth_bp.route("/activate", methods=["POST"])
 def activate():
     data  = request.get_json()
