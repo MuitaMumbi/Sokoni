@@ -8,7 +8,7 @@ from flask_limiter.util import get_remote_address
 from flask_cors import CORS
 from flask_talisman import Talisman
 from config import Config
-from db import init_db
+from db import init_db, get_db
 from flask_cors import CORS
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
@@ -66,6 +66,19 @@ def create_app():
     def missing_token_callback(error):
         return jsonify({"error": "Authorization token is missing."}), 401
 
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        jti = jwt_payload("jti")
+        db  = get_db()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT jti FROM token_blocklist WHERE jti=%s", (jti,))
+        token = cursor.fetchone() is not None
+        cursor.close()
+        return token is not None
+
+    @jwt.revoked_token_loader
+    def revoked_token_callback(jwt_header, jwt_payload):
+        return jsonify({"error": "Token has been revoked. Please sign in again."}), 401
     # Rate Limiting
     limiter = Limiter(
         get_remote_address,
@@ -73,6 +86,7 @@ def create_app():
         default_limits=["200 per hour", "50 per minute"],
         storage_uri="memory://",
     )
+
 
     # Security Headers on every response 
     @app.after_request

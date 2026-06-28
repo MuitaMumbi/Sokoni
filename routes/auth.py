@@ -491,10 +491,10 @@ def check_email():
 @jwt_required()
 def change_password():
     data         = request.get_json()
-    current_pwd  = data.get("current_password", "")
+    password     = data.get("current_password", "")
     new_pwd      = data.get("new_password", "")
 
-    if not current_pwd or not new_pwd:
+    if not password or not new_pwd:
         return jsonify({"error": "Both current and new password are required"}), 400
 
     pw_error = validate_password(new_pwd)
@@ -508,7 +508,7 @@ def change_password():
     cursor.execute("SELECT password FROM users WHERE user_id=%s", (user_id,))
     user = cursor.fetchone()
 
-    if not check_password_hash(user["password"], current_pwd):
+    if not check_password_hash(user["password"], password):
         cursor.close()
         return jsonify({"error": "Current password is incorrect"}), 401
 
@@ -520,3 +520,19 @@ def change_password():
     cursor.close()
 
     return jsonify({"message": "Password updated successfully"}), 200
+
+#  POST /api/auth/logout
+@auth_bp.route("/logout", methods=["POST"])
+@jwt_required()
+def logout():
+    jti    = get_jwt()["jti"]  # unique ID of the current token
+    db     = get_db()
+    cursor = db.cursor()
+
+    cursor.execute(
+        "INSERT INTO token_blocklist (jti) VALUES (%s)", (jti,)
+    )
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Logged out successfully."}), 200

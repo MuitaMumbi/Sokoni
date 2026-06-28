@@ -164,6 +164,15 @@ def init_db():
         )
     """)
 
+    # Token blocklist table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS token_blocklist (
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            jti        VARCHAR(64) NOT NULL UNIQUE,  -- JWT unique identifier
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Promo codes table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS promo_codes (

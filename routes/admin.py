@@ -99,7 +99,7 @@ def dashboard():
     }), 200
 
 
-# ── GET /api/admin/users ─────────────────────────────────────────────────────
+# GET /api/admin/users 
 @admin_bp.route("/users", methods=["GET"])
 @jwt_required()
 def list_users():
