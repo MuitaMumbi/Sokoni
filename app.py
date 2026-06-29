@@ -10,6 +10,7 @@ from flask_talisman import Talisman
 from config import Config
 from db import init_db, get_db
 from flask_cors import CORS
+from flask import request as flask_request
 
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
@@ -82,13 +83,14 @@ def create_app():
     def revoked_token_callback(jwt_header, jwt_payload):
         return jsonify({"error": "Token has been revoked. Please sign in again."}), 401
     # Rate Limiting
+   
     limiter = Limiter(
         get_remote_address,
         app=app,
         default_limits=["200 per hour", "50 per minute"],
         storage_uri="memory://",
+        request_filter=lambda: flask_request.method == "OPTIONS"  # ✅ skip preflight
     )
-
 
     # Security Headers on every response 
     @app.after_request
