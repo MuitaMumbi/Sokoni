@@ -341,6 +341,9 @@ def forgot_password():
         WHERE user_id=%s
     """, (reset_token, token_expiry, user["user_id"]))
     db.commit()
+    current_app.logger.info(f"[FORGOT] rows updated: {cursor.rowcount}")
+    current_app.logger.info(f"[FORGOT] token saved: '{reset_token}'")
+    current_app.logger.info(f"[FORGOT] for user_id: {user['user_id']}")
 
     # Send the reset email
     try:
