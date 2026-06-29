@@ -1,5 +1,6 @@
 import random
 import string
+import token
 import uuid
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
@@ -381,6 +382,10 @@ def reset_password():
     """, (email,))
     user = cursor.fetchone()
 
+    current_app.logger.info(f"[RESET] email received: {email}")
+    current_app.logger.info(f"[RESET] token received: '{token}'")
+    current_app.logger.info(f"[RESET] token in db: '{user['reset_token'] if user else 'NO USER FOUND'}'")
+
     if not user or user["reset_token"] != token:
         cursor.close()
         return jsonify({"error": "Invalid or expired reset token"}), 400
@@ -395,8 +400,7 @@ def reset_password():
         SET password=%s, reset_token=NULL, reset_token_expires=NULL
         WHERE user_id=%s
     """, (generate_password_hash(new_password), user["user_id"]))
-    current_app.logger.info(f"[RESET] received token: {token}")
-    current_app.logger.info(f"[RESET] db token: {user['reset_token']}")
+    
     db.commit()
     cursor.close()
 
