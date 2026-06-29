@@ -395,6 +395,8 @@ def reset_password():
         SET password=%s, reset_token=NULL, reset_token_expires=NULL
         WHERE user_id=%s
     """, (generate_password_hash(new_password), user["user_id"]))
+    current_app.logger.info(f"[RESET] received token: {token}")
+    current_app.logger.info(f"[RESET] db token: {user['reset_token']}")
     db.commit()
     cursor.close()
 
