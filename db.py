@@ -194,6 +194,8 @@ def init_db():
         ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),
         ("users",    "business_name",       "VARCHAR(200) DEFAULT NULL"),
         ("users",    "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
+        ("users",    "reset_token",           "VARCHAR(100) DEFAULT NULL"),       
+        ("users",    "reset_token_expires",   "DATETIME DEFAULT NULL"),   
         ("products", "min_order_qty",       "INT NOT NULL DEFAULT 1"),
         ("products", "unit",                "VARCHAR(50) DEFAULT 'piece'"),
         ("products", "country",             "VARCHAR(100) DEFAULT 'Kenya'"),
