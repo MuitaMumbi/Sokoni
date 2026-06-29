@@ -89,7 +89,7 @@ def create_app():
         app=app,
         default_limits=["200 per hour", "50 per minute"],
         storage_uri="memory://",
-        request_filter=lambda: flask_request.method == "OPTIONS"  # ✅ skip preflight
+        # request_filter=lambda: flask_request.method == "OPTIONS"  # skip preflight
     )
 
     # Security Headers on every response 

@@ -1,6 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt
 from db import get_db
+from routes.auth import validate_password 
+from werkzeug.security import generate_password_hash
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -225,3 +227,43 @@ def approve_supplier(user_id):
     cursor.close()
 
     return jsonify({"message": "Supplier approved successfully"}), 200
+
+#  POST /api/admin/create-admin  (admin — create another admin account)
+@admin_bp.route("/create-admin", methods=["POST"])
+@jwt_required()
+def create_admin():
+    err = _require_admin()
+    if err: return err
+
+    data     = request.get_json()
+    username = data.get("username", "").strip()
+    email    = data.get("email", "").strip().lower()
+    phone    = data.get("phone", "").strip()
+    password = data.get("password", "")
+
+    if not all([username, email, password]):
+        return jsonify({"error": "username, email and password are required"}), 400
+
+    pw_error = validate_password(password)
+    if pw_error:
+        return jsonify({"error": pw_error}), 400
+
+    db     = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute(
+        "SELECT 1 FROM users WHERE email=%s OR username=%s", (email, username)
+    )
+    if cursor.fetchone():
+        cursor.close()
+        return jsonify({"error": "Email or username already exists"}), 409
+
+    cursor.execute("""
+        INSERT INTO users
+            (username, email, phone, password, role, is_active, is_approved)
+        VALUES (%s, %s, %s, %s, 'admin', 1, 1)
+    """, (username, email, phone or "", generate_password_hash(password)))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": f"Admin account created for {username}"}), 201
