@@ -213,7 +213,7 @@ def init_db():
             supplier_id        INT NOT NULL,
             quantity_requested INT NOT NULL,
             status             ENUM('pending','accepted','rejected','fulfilled') DEFAULT 'pending',
-            requested_by       INT DEFAULT NULL,
+            requested_by       INT DEFAULT NULL, 
             auto_generated     BOOLEAN DEFAULT FALSE,
             created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -253,6 +253,7 @@ def init_db():
             FOREIGN KEY (delivery_id) REFERENCES deliveries(delivery_id)
         )
     """)
+
     # Column migrations — add any missing columns to existing tables
     migrations = [
         ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),
