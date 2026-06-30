@@ -12,7 +12,7 @@ def _require_admin():
         return jsonify({"error": "Admin access required"}), 403
 
 
-# ── GET /api/admin/dashboard ────────────────────────────────────────────────
+# ── GET /api/admin/dashboard
 @admin_bp.route("/dashboard", methods=["GET"])
 @jwt_required()
 def dashboard():

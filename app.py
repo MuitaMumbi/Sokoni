@@ -11,7 +11,7 @@ from config import Config
 from db import init_db, get_db
 from flask_cors import CORS
 from flask import request as flask_request
-
+import cloud_config  # Ensure Cloudinary is configured
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
 

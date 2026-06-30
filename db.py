@@ -189,6 +189,70 @@ def init_db():
         )
     """)
 
+    # Tracks actual warehouse stock per product, separate from products.stock
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            inventory_id        INT AUTO_INCREMENT PRIMARY KEY,
+            product_id          INT NOT NULL,
+            supplier_id         INT NOT NULL,
+            quantity            INT NOT NULL DEFAULT 0,
+            low_stock_threshold INT NOT NULL DEFAULT 50,
+            updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id)  REFERENCES products(product_id) ON DELETE CASCADE,
+            FOREIGN KEY (supplier_id) REFERENCES users(user_id),
+            UNIQUE KEY unique_product_supplier (product_id, supplier_id)
+        )
+    """)
+
+
+    ## Warehouse -> Supplier: "we need more stock" (auto-generated or manual)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            po_id              INT AUTO_INCREMENT PRIMARY KEY,
+            product_id         INT NOT NULL,
+            supplier_id        INT NOT NULL,
+            quantity_requested INT NOT NULL,
+            status             ENUM('pending','accepted','rejected','fulfilled') DEFAULT 'pending',
+            requested_by       INT DEFAULT NULL,
+            auto_generated     BOOLEAN DEFAULT FALSE,
+            created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id)   REFERENCES products(product_id),
+            FOREIGN KEY (supplier_id)  REFERENCES users(user_id),
+            FOREIGN KEY (requested_by) REFERENCES users(user_id)
+        )
+    """)
+
+    #-- Supplier -> Warehouse: the actual delivery fulfilling a purchase order
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS deliveries (
+            delivery_id        INT AUTO_INCREMENT PRIMARY KEY,
+            po_id              INT NOT NULL,
+            quantity_delivered INT NOT NULL,
+            status             ENUM('scheduled','in_transit','delivered','cancelled') DEFAULT 'scheduled',
+            delivery_date      DATE,
+            received_by        INT DEFAULT NULL,
+            created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (po_id)         REFERENCES purchase_orders(po_id),
+            FOREIGN KEY (received_by)   REFERENCES users(user_id)
+        )
+    """)
+
+    #-- Money owed to supplier for a delivery
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            invoice_id  INT AUTO_INCREMENT PRIMARY KEY,
+            supplier_id INT NOT NULL,
+            delivery_id INT NOT NULL,
+            amount      DECIMAL(12,2) NOT NULL,
+            status      ENUM('unpaid','paid','overdue') DEFAULT 'unpaid',
+            due_date    DATE,
+            paid_at     TIMESTAMP NULL,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES users(user_id),
+            FOREIGN KEY (delivery_id) REFERENCES deliveries(delivery_id)
+        )
+    """)
     # Column migrations — add any missing columns to existing tables
     migrations = [
         ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),

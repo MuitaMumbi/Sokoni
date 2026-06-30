@@ -1,5 +1,6 @@
 import os
 import uuid
+import cloudinary.uploader
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from werkzeug.utils import secure_filename
@@ -13,6 +14,21 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def upload_product_photo(file):
+    """Uploads to Cloudinary, returns (secure_url, error_message)."""
+    if not file or not allowed_file(file.filename):
+        return None, "Invalid file type. Allowed: png, jpg, jpeg, webp, gif"
+    try:
+        result = cloudinary.uploader.upload(
+            file,
+            folder="sokoni/products",
+            public_id=uuid.uuid4().hex,
+            resource_type="image",
+            overwrite=False,
+        )
+        return result["secure_url"], None
+    except Exception as e:
+        return None, f"Image upload failed: {str(e)}"
 
 def require_admin_or_supplier():
     claims = get_jwt()
@@ -57,15 +73,9 @@ def add_product():
     photo_path = None
     if "product_photo" in request.files:
         file = request.files["product_photo"]
-        if file and allowed_file(file.filename):
-            ext        = secure_filename(file.filename).rsplit(".", 1)[1].lower()
-            filename   = f"{uuid.uuid4().hex}.{ext}"
-            upload_dir = current_app.config["UPLOAD_FOLDER"]
-            os.makedirs(upload_dir, exist_ok=True)
-            file.save(os.path.join(upload_dir, filename))
-            photo_path = f"{upload_dir}/{filename}"
-        else:
-            return jsonify({"error": "Invalid file type. Allowed: png, jpg, jpeg, webp, gif"}), 400
+        photo_path, upload_err = upload_product_photo(file)
+        if upload_err:
+            return jsonify({"error": upload_err}), 400
 
     db     = get_db()
     cursor = db.cursor(dictionary=True)
@@ -201,13 +211,11 @@ def update_product(product_id):
 
     if is_multipart and "product_photo" in request.files:
         file = request.files["product_photo"]
-        if file and allowed_file(file.filename):
-            ext        = secure_filename(file.filename).rsplit(".", 1)[1].lower()
-            filename   = f"{uuid.uuid4().hex}.{ext}"
-            upload_dir = current_app.config["UPLOAD_FOLDER"]
-            os.makedirs(upload_dir, exist_ok=True)
-            file.save(os.path.join(upload_dir, filename))
-            updates.append("product_photo=%s"); vals.append(f"{upload_dir}/{filename}")
+        if file and file.filename:
+            photo_url, upload_err = upload_product_photo(file)
+            if upload_err:
+                return jsonify({"error": upload_err}), 400
+            updates.append("product_photo=%s"); vals.append(photo_url)
 
     if not updates:
         return jsonify({"error": "No fields to update"}), 400
@@ -218,7 +226,6 @@ def update_product(product_id):
     cursor.close()
 
     return jsonify({"message": "Product updated successfully"}), 200
-
 
 #  DELETE /api/products/<id>
 @products_bp.route("/<int:product_id>", methods=["DELETE"])
