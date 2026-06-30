@@ -188,6 +188,7 @@ def init_db():
             created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+   
 
     # Tracks actual warehouse stock per product, separate from products.stock
     cursor.execute("""
@@ -251,6 +252,32 @@ def init_db():
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES users(user_id),
             FOREIGN KEY (delivery_id) REFERENCES deliveries(delivery_id)
+        )
+    """)
+
+     # supplier's profile 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS supplier_profiles (
+            profile_id          INT AUTO_INCREMENT PRIMARY KEY,
+            supplier_id         INT NOT NULL UNIQUE,
+            company_name        VARCHAR(200),
+            business_reg_number VARCHAR(100),
+            kra_pin             VARCHAR(50),
+            vat_number          VARCHAR(50),
+            contact_person      VARCHAR(150),
+            phone               VARCHAR(30),
+            business_address    TEXT,
+            warehouse_address   TEXT,
+            bank_name           VARCHAR(100),
+            bank_account_number VARCHAR(50),
+            bank_account_name   VARCHAR(150),
+            mpesa_number        VARCHAR(20),
+            mpesa_name          VARCHAR(150),
+            logo_url            VARCHAR(255),
+            is_complete         TINYINT(1) NOT NULL DEFAULT 0,
+            created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES users(user_id) ON DELETE CASCADE
         )
     """)
 

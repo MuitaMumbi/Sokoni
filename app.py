@@ -12,6 +12,8 @@ from db import init_db, get_db
 from flask_cors import CORS
 from flask import request as flask_request
 import cloud_config  # Ensure Cloudinary is configured
+from supplier import supplier_bp
+
 #Logging Setup
 os.makedirs("logs", exist_ok=True)
 
@@ -163,7 +165,7 @@ def create_app():
     app.register_blueprint(orders_bp,   url_prefix="/api/orders")
     app.register_blueprint(mpesa_bp,    url_prefix="/api/mpesa")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
-
+    app.register_blueprint(supplier_bp, url_prefix="/api/supplier")
     # Initialize DB 
     with app.app_context():
         init_db()
