@@ -48,3 +48,26 @@ Traceback (most recent call last):
         err.errno, msg=err.msg, sqlstate=err.sqlstate
     ) from err
 mysql.connector.errors.ProgrammingError: 1054 (42S22): Unknown column 'reset_token' in 'field list'
+[2026-07-03 18:28:32,709] ERROR app: 500 Internal Error: 500 Internal Server Error: The server encountered an internal error and was unable to complete your request. Either the server is overloaded or there is an error in the application. | Path: /api/auth/signin
+Traceback (most recent call last):
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\flask_cors\extension.py", line 206, in wrapped_function
+    return cors_after_request(app_any.make_response(f(*args, **kwargs)))
+                                                    ~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\routes\auth.py", line 282, in signin
+    if not user or not check_password_hash(user["password"], pwd):
+                       ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\werkzeug\security.py", line 142, in check_password_hash
+    return hmac.compare_digest(_hash_internal(method, salt, password)[0], hashval)
+                               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muita\OneDrive\Desktop\sokoni\venv\Lib\site-packages\werkzeug\security.py", line 81, in _hash_internal
+    raise ValueError(f"Invalid hash method '{method}'.")
+ValueError: Invalid hash method '1000000'.
