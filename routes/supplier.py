@@ -132,3 +132,105 @@ def get_profile():
         return jsonify({"profile": None, "is_complete": False}), 200
 
     return jsonify({"profile": profile, "is_complete": bool(profile["is_complete"])}), 200
+
+
+# GET /api/supplier/dashboard
+@supplier_bp.route("/dashboard", methods=["GET"])
+@jwt_required()
+def get_dashboard():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    # Total products this supplier has listed
+    cursor.execute("""
+        SELECT COUNT(*) AS total_products FROM products
+        WHERE created_by = %s
+    """, (user_id,))
+    total_products = cursor.fetchone()["total_products"]
+
+    # Active products (in stock)
+    cursor.execute("""
+        SELECT COUNT(*) AS active_products FROM products
+        WHERE created_by = %s AND stock > 0
+    """, (user_id,))
+    active_products = cursor.fetchone()["active_products"]
+
+    # Low stock products (stock > 0 but below threshold in inventory)
+    cursor.execute("""
+        SELECT COUNT(*) AS low_stock FROM inventory
+        WHERE supplier_id = %s AND quantity <= low_stock_threshold AND quantity > 0
+    """, (user_id,))
+    low_stock = cursor.fetchone()["low_stock"]
+
+    # Out of stock products
+    cursor.execute("""
+        SELECT COUNT(*) AS out_of_stock FROM products
+        WHERE created_by = %s AND stock = 0
+    """, (user_id,))
+    out_of_stock = cursor.fetchone()["out_of_stock"]
+
+    # Pending purchase orders raised against this supplier
+    cursor.execute("""
+        SELECT COUNT(*) AS pending_pos FROM purchase_orders
+        WHERE supplier_id = %s AND status = 'pending'
+    """, (user_id,))
+    pending_pos = cursor.fetchone()["pending_pos"]
+
+    # Unpaid invoices
+    cursor.execute("""
+        SELECT COUNT(*) AS unpaid_invoices FROM invoices
+        WHERE supplier_id = %s AND status = 'unpaid'
+    """, (user_id,))
+    unpaid_invoices = cursor.fetchone()["unpaid_invoices"]
+
+    # Total unpaid amount
+    cursor.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS unpaid_amount FROM invoices
+        WHERE supplier_id = %s AND status = 'unpaid'
+    """, (user_id,))
+    unpaid_amount = cursor.fetchone()["unpaid_amount"]
+
+    # Recent purchase orders (last 5)
+    cursor.execute("""
+        SELECT po.po_id, p.product_name, po.quantity_requested,
+               po.status, po.created_at
+        FROM purchase_orders po
+        JOIN products p ON p.product_id = po.product_id
+        WHERE po.supplier_id = %s
+        ORDER BY po.created_at DESC
+        LIMIT 5
+    """, (user_id,))
+    recent_pos = cursor.fetchall()
+
+    # Recent deliveries (last 5)
+    cursor.execute("""
+        SELECT d.delivery_id, d.quantity_delivered, d.status,
+               d.delivery_date, po.po_id
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        WHERE po.supplier_id = %s
+        ORDER BY d.created_at DESC
+        LIMIT 5
+    """, (user_id,))
+    recent_deliveries = cursor.fetchall()
+
+    cursor.close()
+
+    return jsonify({
+        "stats": {
+            "total_products":   total_products,
+            "active_products":  active_products,
+            "low_stock":        low_stock,
+            "out_of_stock":     out_of_stock,
+            "pending_pos":      pending_pos,
+            "unpaid_invoices":  unpaid_invoices,
+            "unpaid_amount":    float(unpaid_amount),
+        },
+        "recent_purchase_orders": recent_pos,
+        "recent_deliveries":      recent_deliveries,
+    }), 200
