@@ -155,7 +155,7 @@ def create_app():
     from routes.orders   import orders_bp
     from routes.mpesa    import mpesa_bp
     from routes.admin import admin_bp
-
+    from routes.supplier import supplier_bp
     # Stricter limits on auth endpoints to prevent brute force
     limiter.limit("10 per minute")(auth_bp)
 
