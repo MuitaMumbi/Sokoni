@@ -636,3 +636,182 @@ def confirm_dispatch(po_id):
         "delivery_id": delivery_id,
         "status":      "fulfilled",
     }), 200
+
+# GET /api/supplier/shipments — list all shipments for this supplier
+@supplier_bp.route("/shipments", methods=["GET"])
+@jwt_required()
+def get_shipments():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    status = request.args.get("status")
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = ["po.supplier_id = %s"]
+    params  = [user_id]
+
+    if status:
+        filters.append("d.status = %s")
+        params.append(status)
+
+    where = "WHERE " + " AND ".join(filters)
+
+    cursor.execute(f"""
+        SELECT d.delivery_id, d.quantity_delivered, d.status,
+               d.delivery_date, d.created_at,
+               po.po_id, po.quantity_requested,
+               p.product_name, p.unit,
+               u.username AS received_by_name
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        JOIN products p ON p.product_id = po.product_id
+        LEFT JOIN users u ON u.user_id = d.received_by
+        {where}
+        ORDER BY d.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    shipments = cursor.fetchall()
+
+    cursor.execute(f"""
+        SELECT COUNT(*) AS total
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        {where}
+    """, params)
+    total = cursor.fetchone()["total"]
+    cursor.close()
+
+    return jsonify({
+        "shipments": shipments,
+        "total":  total,
+        "page":   page,
+        "limit":  limit,
+        "pages":  (total + limit - 1) // limit,
+    }), 200
+
+
+# GET /api/supplier/shipments/<id> — view single shipment
+@supplier_bp.route("/shipments/<int:delivery_id>", methods=["GET"])
+@jwt_required()
+def get_shipment(delivery_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT d.*, po.quantity_requested, po.status AS po_status,
+               p.product_name, p.unit, p.product_photo,
+               u.username AS received_by_name
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        JOIN products p ON p.product_id = po.product_id
+        LEFT JOIN users u ON u.user_id = d.received_by
+        WHERE d.delivery_id = %s AND po.supplier_id = %s
+    """, (delivery_id, user_id))
+    shipment = cursor.fetchone()
+    cursor.close()
+
+    if not shipment:
+        return jsonify({"error": "Shipment not found or access denied"}), 404
+
+    return jsonify({"shipment": shipment}), 200
+
+
+# PATCH /api/supplier/shipments/<id>/status — update shipment status
+@supplier_bp.route("/shipments/<int:delivery_id>/status", methods=["PATCH"])
+@jwt_required()
+def update_shipment_status(delivery_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT d.*, po.supplier_id, po.product_id, po.quantity_requested
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        WHERE d.delivery_id = %s AND po.supplier_id = %s
+    """, (delivery_id, user_id))
+    shipment = cursor.fetchone()
+
+    if not shipment:
+        return jsonify({"error": "Shipment not found or access denied"}), 404
+
+    data       = request.get_json() or {}
+    new_status = (data.get("status") or "").strip().lower()
+
+    valid_statuses = {"scheduled", "in_transit", "delivered", "cancelled"}
+    if new_status not in valid_statuses:
+        return jsonify({"error": f"status must be one of: {', '.join(valid_statuses)}"}), 400
+
+    # Enforce logical status progression
+    current = shipment["status"]
+    allowed_transitions = {
+        "scheduled":  ["in_transit", "cancelled"],
+        "in_transit": ["delivered", "cancelled"],
+        "delivered":  [],
+        "cancelled":  [],
+    }
+    if new_status not in allowed_transitions[current]:
+        return jsonify({
+            "error": f"Cannot transition from '{current}' to '{new_status}'"
+        }), 400
+
+    cursor.execute("""
+        UPDATE deliveries SET status = %s WHERE delivery_id = %s
+    """, (new_status, delivery_id))
+
+    # When delivery is confirmed, update inventory
+    if new_status == "delivered":
+        cursor.execute("""
+            UPDATE inventory
+            SET quantity = quantity + %s
+            WHERE product_id = %s AND supplier_id = %s
+        """, (shipment["quantity_delivered"], shipment["product_id"], user_id))
+
+        # Sync products.stock
+        cursor.execute("""
+            UPDATE products SET stock = stock + %s
+            WHERE product_id = %s
+        """, (shipment["quantity_delivered"], shipment["product_id"]))
+
+        # Log the inventory movement
+        cursor.execute("""
+            SELECT inventory_id FROM inventory
+            WHERE product_id = %s AND supplier_id = %s
+        """, (shipment["product_id"], user_id))
+        inv = cursor.fetchone()
+        if inv:
+            cursor.execute("""
+                INSERT INTO inventory_movements
+                    (inventory_id, supplier_id, product_id, movement_type, quantity, note, created_by)
+                VALUES (%s, %s, %s, 'stock_in', %s, %s, %s)
+            """, (
+                inv["inventory_id"], user_id, shipment["product_id"],
+                shipment["quantity_delivered"],
+                f"Delivery confirmed for shipment #{delivery_id}",
+                user_id
+            ))
+
+    db.commit()
+    cursor.close()
+
+    return jsonify({
+        "message":    f"Shipment status updated to '{new_status}'",
+        "delivery_id": delivery_id,
+        "status":     new_status,
+    }), 200
