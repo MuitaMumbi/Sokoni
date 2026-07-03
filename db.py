@@ -282,22 +282,22 @@ def init_db():
     """)
 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS inventory_movements (
-        movement_id   INT AUTO_INCREMENT PRIMARY KEY,
-        inventory_id  INT NOT NULL,
-        supplier_id   INT NOT NULL,
-        product_id    INT NOT NULL,
-        movement_type ENUM('stock_in', 'stock_out', 'adjustment', 'return', 'damage') NOT NULL,
-        quantity      INT NOT NULL,
-        note          TEXT,
-        created_by    INT,
-        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (inventory_id) REFERENCES inventory(inventory_id) ON DELETE CASCADE,
-        FOREIGN KEY (supplier_id)  REFERENCES users(user_id),
-        FOREIGN KEY (product_id)   REFERENCES products(product_id),
-        FOREIGN KEY (created_by)   REFERENCES users(user_id)
-    )
-""")
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            movement_id   INT AUTO_INCREMENT PRIMARY KEY,
+            inventory_id  INT NOT NULL,
+            supplier_id   INT NOT NULL,
+            product_id    INT NOT NULL,
+            movement_type ENUM('stock_in', 'stock_out', 'adjustment', 'return', 'damage') NOT NULL,
+            quantity      INT NOT NULL,
+            note          TEXT,
+            created_by    INT,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (inventory_id) REFERENCES inventory(inventory_id) ON DELETE CASCADE,
+            FOREIGN KEY (supplier_id)  REFERENCES users(user_id),
+            FOREIGN KEY (product_id)   REFERENCES products(product_id),
+            FOREIGN KEY (created_by)   REFERENCES users(user_id)
+        )
+    """)
 
     # Column migrations — add any missing columns to existing tables
     migrations = [

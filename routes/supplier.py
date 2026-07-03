@@ -456,10 +456,10 @@ def delete_supplier_product(product_id):
 
     return jsonify({"message": "Product deleted successfully"}), 200
 
-# GET /api/supplier/inventory — view all inventory for this supplier
-@supplier_bp.route("/inventory", methods=["GET"])
+# GET /api/supplier/purchase-orders — list all POs for this supplier
+@supplier_bp.route("/purchase-orders", methods=["GET"])
 @jwt_required()
-def get_inventory():
+def get_purchase_orders():
     err = require_approved_supplier()
     if err:
         return err
@@ -468,30 +468,53 @@ def get_inventory():
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("""
-        SELECT i.inventory_id, i.quantity, i.low_stock_threshold,
-               i.updated_at, p.product_id, p.product_name,
-               p.product_photo, p.unit,
-               CASE
-                   WHEN i.quantity = 0 THEN 'out_of_stock'
-                   WHEN i.quantity <= i.low_stock_threshold THEN 'low_stock'
-                   ELSE 'in_stock'
-               END AS stock_status
-        FROM inventory i
-        JOIN products p ON p.product_id = i.product_id
-        WHERE i.supplier_id = %s
-        ORDER BY i.updated_at DESC
-    """, (user_id,))
-    inventory = cursor.fetchall()
+    status = request.args.get("status")  # optional filter e.g. ?status=pending
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = ["po.supplier_id = %s"]
+    params  = [user_id]
+
+    if status:
+        filters.append("po.status = %s")
+        params.append(status)
+
+    where = "WHERE " + " AND ".join(filters)
+
+    cursor.execute(f"""
+        SELECT po.po_id, po.quantity_requested, po.status,
+               po.auto_generated, po.created_at, po.updated_at,
+               p.product_id, p.product_name, p.unit, p.product_photo,
+               u.username AS requested_by_name
+        FROM purchase_orders po
+        JOIN products p ON p.product_id = po.product_id
+        LEFT JOIN users u ON u.user_id = po.requested_by
+        {where}
+        ORDER BY po.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    orders = cursor.fetchall()
+
+    cursor.execute(f"""
+        SELECT COUNT(*) AS total FROM purchase_orders po {where}
+    """, params)
+    total = cursor.fetchone()["total"]
     cursor.close()
 
-    return jsonify({"inventory": inventory}), 200
+    return jsonify({
+        "purchase_orders": orders,
+        "total":  total,
+        "page":   page,
+        "limit":  limit,
+        "pages":  (total + limit - 1) // limit,
+    }), 200
 
 
-# PATCH /api/supplier/inventory/<id> — update stock quantity
-@supplier_bp.route("/inventory/<int:inventory_id>", methods=["PATCH"])
+# GET /api/supplier/purchase-orders/<id> — view single PO
+@supplier_bp.route("/purchase-orders/<int:po_id>", methods=["GET"])
 @jwt_required()
-def update_inventory(inventory_id):
+def get_purchase_order(po_id):
     err = require_approved_supplier()
     if err:
         return err
@@ -501,80 +524,71 @@ def update_inventory(inventory_id):
     cursor = db.cursor(dictionary=True)
 
     cursor.execute("""
-        SELECT * FROM inventory
-        WHERE inventory_id = %s AND supplier_id = %s
-    """, (inventory_id, user_id))
-    record = cursor.fetchone()
-    if not record:
-        return jsonify({"error": "Inventory record not found or access denied"}), 404
+        SELECT po.*, p.product_name, p.unit, p.product_photo,
+               u.username AS requested_by_name
+        FROM purchase_orders po
+        JOIN products p ON p.product_id = po.product_id
+        LEFT JOIN users u ON u.user_id = po.requested_by
+        WHERE po.po_id = %s AND po.supplier_id = %s
+    """, (po_id, user_id))
+    order = cursor.fetchone()
+    cursor.close()
 
-    data          = request.get_json() or {}
-    quantity      = data.get("quantity")
-    movement_type = data.get("movement_type", "adjustment")
-    note          = data.get("note", "")
-    threshold     = data.get("low_stock_threshold")
+    if not order:
+        return jsonify({"error": "Purchase order not found or access denied"}), 404
 
-    if quantity is None:
-        return jsonify({"error": "quantity is required"}), 400
+    return jsonify({"purchase_order": order}), 200
 
-    try:
-        quantity = int(quantity)
-    except ValueError:
-        return jsonify({"error": "quantity must be a number"}), 400
 
-    valid_types = {"stock_in", "stock_out", "adjustment", "return", "damage"}
-    if movement_type not in valid_types:
-        return jsonify({"error": f"movement_type must be one of: {', '.join(valid_types)}"}), 400
+# PATCH /api/supplier/purchase-orders/<id>/respond — accept or reject
+@supplier_bp.route("/purchase-orders/<int:po_id>/respond", methods=["PATCH"])
+@jwt_required()
+def respond_to_purchase_order(po_id):
+    err = require_approved_supplier()
+    if err:
+        return err
 
-    # Calculate new quantity based on movement type
-    old_quantity = record["quantity"]
-    if movement_type == "stock_in" or movement_type == "return":
-        new_quantity = old_quantity + quantity
-    elif movement_type == "stock_out" or movement_type == "damage":
-        new_quantity = max(0, old_quantity - quantity)
-    else:  # adjustment — set directly
-        new_quantity = quantity
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
 
-    updates = ["quantity = %s"]
-    vals    = [new_quantity]
-
-    if threshold is not None:
-        updates.append("low_stock_threshold = %s")
-        vals.append(int(threshold))
-
-    vals.append(inventory_id)
-    cursor.execute(
-        f"UPDATE inventory SET {', '.join(updates)} WHERE inventory_id = %s", vals
-    )
-
-    # Also sync products.stock
-    cursor.execute(
-        "UPDATE products SET stock = %s WHERE product_id = %s",
-        (new_quantity, record["product_id"])
-    )
-
-    # Log the movement
     cursor.execute("""
-        INSERT INTO inventory_movements
-            (inventory_id, supplier_id, product_id, movement_type, quantity, note, created_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (inventory_id, user_id, record["product_id"], movement_type, quantity, note, user_id))
+        SELECT * FROM purchase_orders
+        WHERE po_id = %s AND supplier_id = %s
+    """, (po_id, user_id))
+    order = cursor.fetchone()
 
+    if not order:
+        return jsonify({"error": "Purchase order not found or access denied"}), 404
+
+    if order["status"] != "pending":
+        return jsonify({"error": f"Cannot respond to a PO with status '{order['status']}'"}), 400
+
+    data   = request.get_json() or {}
+    action = (data.get("action") or "").strip().lower()
+
+    if action not in ("accept", "reject"):
+        return jsonify({"error": "action must be 'accept' or 'reject'"}), 400
+
+    new_status = "accepted" if action == "accept" else "rejected"
+
+    cursor.execute("""
+        UPDATE purchase_orders SET status = %s WHERE po_id = %s
+    """, (new_status, po_id))
     db.commit()
     cursor.close()
 
     return jsonify({
-        "message": "Inventory updated",
-        "old_quantity": old_quantity,
-        "new_quantity": new_quantity,
-        "movement_type": movement_type,
+        "message": f"Purchase order {new_status} successfully",
+        "po_id":   po_id,
+        "status":  new_status,
     }), 200
 
 
-# GET /api/supplier/inventory/<id>/history — movement audit log
-@supplier_bp.route("/inventory/<int:inventory_id>/history", methods=["GET"])
+# PATCH /api/supplier/purchase-orders/<id>/dispatch — confirm dispatch
+@supplier_bp.route("/purchase-orders/<int:po_id>/dispatch", methods=["PATCH"])
 @jwt_required()
-def get_inventory_history(inventory_id):
+def confirm_dispatch(po_id):
     err = require_approved_supplier()
     if err:
         return err
@@ -583,23 +597,42 @@ def get_inventory_history(inventory_id):
     db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    # Confirm this inventory record belongs to the supplier
     cursor.execute("""
-        SELECT inventory_id FROM inventory
-        WHERE inventory_id = %s AND supplier_id = %s
-    """, (inventory_id, user_id))
-    if not cursor.fetchone():
-        return jsonify({"error": "Inventory record not found or access denied"}), 404
+        SELECT * FROM purchase_orders
+        WHERE po_id = %s AND supplier_id = %s
+    """, (po_id, user_id))
+    order = cursor.fetchone()
 
+    if not order:
+        return jsonify({"error": "Purchase order not found or access denied"}), 404
+
+    if order["status"] != "accepted":
+        return jsonify({"error": "Only accepted purchase orders can be dispatched"}), 400
+
+    data          = request.get_json() or {}
+    delivery_date = data.get("delivery_date")  # expected format: YYYY-MM-DD
+
+    if not delivery_date:
+        return jsonify({"error": "delivery_date is required"}), 400
+
+    # Update PO status to fulfilled
     cursor.execute("""
-        SELECT m.movement_id, m.movement_type, m.quantity,
-               m.note, m.created_at, p.product_name
-        FROM inventory_movements m
-        JOIN products p ON p.product_id = m.product_id
-        WHERE m.inventory_id = %s
-        ORDER BY m.created_at DESC
-    """, (inventory_id,))
-    history = cursor.fetchall()
+        UPDATE purchase_orders SET status = 'fulfilled' WHERE po_id = %s
+    """, (po_id,))
+
+    # Create a delivery record
+    cursor.execute("""
+        INSERT INTO deliveries (po_id, quantity_delivered, status, delivery_date)
+        VALUES (%s, %s, 'scheduled', %s)
+    """, (po_id, order["quantity_requested"], delivery_date))
+
+    db.commit()
+    delivery_id = cursor.lastrowid
     cursor.close()
 
-    return jsonify({"history": history}), 200
+    return jsonify({
+        "message":     "Dispatch confirmed, delivery scheduled",
+        "po_id":       po_id,
+        "delivery_id": delivery_id,
+        "status":      "fulfilled",
+    }), 200
