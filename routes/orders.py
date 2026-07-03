@@ -20,97 +20,15 @@ def _increment_promo(cursor, promo_id):
             (promo_id,)
         )
 
-
-#  POST /api/orders/guest  — Place order without an account
-@orders_bp.route("/guest", methods=["POST"])
-def place_guest_order():
-    data = request.get_json() or {}
-
-    buyer_name       = data.get("buyer_name", "").strip()
-    buyer_phone      = data.get("buyer_phone", "").strip()
-    buyer_email      = data.get("buyer_email", "").strip().lower()
-    delivery_address = data.get("delivery_address", "").strip()
-    delivery_city    = data.get("delivery_city", "").strip()
-    country          = data.get("country", "Kenya").strip()
-    items            = data.get("items", [])
-    promo_code       = (data.get("promo_code") or "").strip().upper() or None
-
-    if not buyer_name or not buyer_phone:
-        return jsonify({"error": "buyer_name and buyer_phone are required"}), 400
-    if not delivery_address or not delivery_city:
-        return jsonify({"error": "delivery_address and delivery_city are required"}), 400
-    if not items:
-        return jsonify({"error": "No items in order"}), 400
-
-    db     = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    subtotal = 0
-    validated = []
-    for entry in items:
-        product_id = entry.get("product_id")
-        quantity   = int(entry.get("quantity", 1))
-        cursor.execute(
-            "SELECT product_id, product_name, product_cost, stock, min_order_qty FROM products WHERE product_id=%s",
-            (product_id,)
-        )
-        product = cursor.fetchone()
-        if not product:
-            return jsonify({"error": f"Product {product_id} not found"}), 404
-        if product["stock"] < quantity:
-            return jsonify({"error": f"Not enough stock for '{product['product_name']}'"}), 400
-        if quantity < product["min_order_qty"]:
-            return jsonify({"error": f"Min order for '{product['product_name']}' is {product['min_order_qty']}"}), 400
-        subtotal += float(product["product_cost"]) * quantity
-        validated.append({**product, "quantity": quantity})
-
-    try:
-        promo_id, discount = _resolve_promo(promo_code, subtotal, cursor)
-    except ValueError as e:
-        cursor.close()
-        return jsonify({"error": str(e)}), 400
-
-    total = round(subtotal - discount, 2)
-
-    cursor.execute("""
-        INSERT INTO orders
-            (user_id, total_amount, discount_amount, promo_code,
-             delivery_address, delivery_city, country,
-             buyer_name, buyer_phone, buyer_email)
-        VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (total, round(discount, 2), promo_code,
-          delivery_address, delivery_city, country,
-          buyer_name, buyer_phone, buyer_email or None))
-    db.commit()
-    order_id = cursor.lastrowid
-
-    for p in validated:
-        cursor.execute(
-            "INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (%s, %s, %s, %s)",
-            (order_id, p["product_id"], p["quantity"], p["product_cost"])
-        )
-        cursor.execute(
-            "UPDATE products SET stock = stock - %s WHERE product_id = %s",
-            (p["quantity"], p["product_id"])
-        )
-
-    _increment_promo(cursor, promo_id)
-    db.commit()
-    cursor.close()
-
-    return jsonify({
-        "message":         "Order placed successfully",
-        "order_id":        order_id,
-        "subtotal":        round(subtotal, 2),
-        "discount_amount": round(discount, 2),
-        "total_amount":    total,
-    }), 201
-
-
 #  POST /api/orders/  — Place order from cart
 @orders_bp.route("/", methods=["POST"])
 @jwt_required()
 def place_order():
+
+    claims = get_jwt()
+    if claims.get("role") not in ("retailer", "customer"):
+        return jsonify({"error": "Only retailers can place orders"}), 403
+
     user_id = get_jwt_identity()
     data    = request.get_json() or {}
     db      = get_db()

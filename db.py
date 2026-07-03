@@ -317,6 +317,19 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS loyalty_points (
+            point_id   INT AUTO_INCREMENT PRIMARY KEY,
+            user_id    INT NOT NULL,
+            order_id   INT,
+            points     INT NOT NULL DEFAULT 0,
+            reason     VARCHAR(100),
+            is_active  TINYINT(1) NOT NULL DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id)  REFERENCES users(user_id) ON DELETE CASCADE,
+            FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE SET NULL
+        )
+    """)
     # Column migrations — add any missing columns to existing tables
     migrations = [
         ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),

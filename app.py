@@ -156,6 +156,8 @@ def create_app():
     from routes.mpesa    import mpesa_bp
     from routes.admin import admin_bp
     from routes.supplier import supplier_bp
+    from routes.categories import categories_bp
+    from routes.retailer import retailer_bp
     # Stricter limits on auth endpoints to prevent brute force
     limiter.limit("10 per minute")(auth_bp)
 
@@ -166,6 +168,8 @@ def create_app():
     app.register_blueprint(mpesa_bp,    url_prefix="/api/mpesa")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
     app.register_blueprint(supplier_bp, url_prefix="/api/supplier")
+    app.register_blueprint(retailer_bp, url_prefix="/api/retailer")
+    app.register_blueprint(categories_bp, url_prefix="/api/categories")
     # Initialize DB 
     with app.app_context():
         init_db()
