@@ -300,6 +300,7 @@ def init_db():
         ("orders",   "buyer_name",          "VARCHAR(200) DEFAULT NULL"),
         ("orders",   "buyer_phone",         "VARCHAR(30) DEFAULT NULL"),
         ("orders",   "buyer_email",         "VARCHAR(150) DEFAULT NULL"),
+        ("products", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"),
     ]
     for table, col, definition in migrations:
         cursor.execute("""

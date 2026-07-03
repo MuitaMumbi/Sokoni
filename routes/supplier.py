@@ -3,10 +3,12 @@ from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from db import get_db
 import cloudinary.uploader
 import uuid
+from werkzeug.utils import secure_filename
 
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
 supplier_bp = Blueprint("supplier", __name__)
 
-
+# Helper function to check if the user is an approved supplier
 def require_approved_supplier():
     """Ensures the caller is a supplier and is approved."""
     claims = get_jwt()
@@ -234,3 +236,222 @@ def get_dashboard():
         "recent_purchase_orders": recent_pos,
         "recent_deliveries":      recent_deliveries,
     }), 200
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def upload_image(file, folder="sokoni/products"):
+    if not file or not allowed_file(file.filename):
+        return None, "Invalid file type. Allowed: png, jpg, jpeg, webp, gif"
+    try:
+        result = cloudinary.uploader.upload(
+            file,
+            folder=folder,
+            public_id=uuid.uuid4().hex,
+            resource_type="image",
+        )
+        return result["secure_url"], None
+    except Exception as e:
+        return None, f"Image upload failed: {str(e)}"
+
+
+# GET /api/supplier/products — list own products
+@supplier_bp.route("/products", methods=["GET"])
+@jwt_required()
+def get_supplier_products():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    page  = max(1, int(request.args.get("page", 1)))
+    limit = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    cursor.execute("""
+        SELECT p.*, c.name AS category
+        FROM products p
+        LEFT JOIN categories c ON c.category_id = p.category_id
+        WHERE p.created_by = %s
+        ORDER BY p.created_at DESC
+        LIMIT %s OFFSET %s
+    """, (user_id, limit, offset))
+    products = cursor.fetchall()
+
+    cursor.execute("SELECT COUNT(*) AS total FROM products WHERE created_by = %s", (user_id,))
+    total = cursor.fetchone()["total"]
+    cursor.close()
+
+    return jsonify({
+        "products": products,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+    }), 200
+
+
+# POST /api/supplier/products — add a product
+@supplier_bp.route("/products", methods=["POST"])
+@jwt_required()
+def add_supplier_product():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    is_multipart = request.content_type and "multipart" in request.content_type
+    data = request.form if is_multipart else (request.get_json() or {})
+
+    product_name  = (data.get("product_name") or "").strip()
+    product_cost  = data.get("product_cost")
+    product_desc  = data.get("product_desc") or ""
+    stock         = data.get("stock", 0)
+    category_id   = data.get("category_id")
+    min_order_qty = data.get("min_order_qty", 1)
+    unit          = (data.get("unit") or "piece").strip()
+    country       = (data.get("country") or "Kenya").strip()
+
+    if not product_name or product_cost is None:
+        return jsonify({"error": "product_name and product_cost are required"}), 400
+
+    try:
+        product_cost  = float(product_cost)
+        stock         = int(stock)
+        min_order_qty = int(min_order_qty)
+        category_id   = int(category_id) if category_id else None
+    except ValueError:
+        return jsonify({"error": "Invalid numeric value"}), 400
+
+    photo_url = None
+    if is_multipart and "product_photo" in request.files:
+        photo_url, upload_err = upload_image(request.files["product_photo"])
+        if upload_err:
+            return jsonify({"error": upload_err}), 400
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        INSERT INTO products
+            (product_name, product_cost, product_desc, product_photo,
+             stock, category_id, min_order_qty, unit, country, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (product_name, product_cost, product_desc, photo_url,
+          stock, category_id, min_order_qty, unit, country, user_id))
+    db.commit()
+    product_id = cursor.lastrowid
+
+    # Auto-create inventory record for this product
+    cursor.execute("""
+        INSERT INTO inventory (product_id, supplier_id, quantity, low_stock_threshold)
+        VALUES (%s, %s, %s, 50)
+    """, (product_id, user_id, stock))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Product added successfully", "product_id": product_id}), 201
+
+
+# PUT /api/supplier/products/<id> — edit own product
+@supplier_bp.route("/products/<int:product_id>", methods=["PUT"])
+@jwt_required()
+def update_supplier_product(product_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM products WHERE product_id = %s AND created_by = %s", (product_id, user_id))
+    product = cursor.fetchone()
+    if not product:
+        return jsonify({"error": "Product not found or access denied"}), 404
+
+    is_multipart = request.content_type and "multipart" in request.content_type
+    data = request.form if is_multipart else (request.get_json() or {})
+    updates, vals = [], []
+
+    for field in ("product_name", "product_desc", "unit", "country"):
+        if data.get(field) is not None:
+            updates.append(f"{field} = %s"); vals.append(data[field])
+    if data.get("product_cost") is not None:
+        updates.append("product_cost = %s"); vals.append(float(data["product_cost"]))
+    if data.get("stock") is not None:
+        updates.append("stock = %s"); vals.append(int(data["stock"]))
+    if data.get("min_order_qty") is not None:
+        updates.append("min_order_qty = %s"); vals.append(int(data["min_order_qty"]))
+    if data.get("category_id") is not None:
+        updates.append("category_id = %s"); vals.append(int(data["category_id"]))
+
+    if is_multipart and "product_photo" in request.files:
+        file = request.files["product_photo"]
+        if file and file.filename:
+            photo_url, upload_err = upload_image(file)
+            if upload_err:
+                return jsonify({"error": upload_err}), 400
+            updates.append("product_photo = %s"); vals.append(photo_url)
+
+    if not updates:
+        return jsonify({"error": "No fields to update"}), 400
+
+    vals.append(product_id)
+    cursor.execute(f"UPDATE products SET {', '.join(updates)} WHERE product_id = %s", vals)
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Product updated successfully"}), 200
+
+
+# PATCH /api/supplier/products/<id>/archive — deactivate without deleting
+@supplier_bp.route("/products/<int:product_id>/archive", methods=["PATCH"])
+@jwt_required()
+def archive_supplier_product(product_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT product_id, is_active FROM products WHERE product_id = %s AND created_by = %s", (product_id, user_id))
+    product = cursor.fetchone()
+    if not product:
+        return jsonify({"error": "Product not found or access denied"}), 404
+
+    new_status = 0 if product["is_active"] else 1
+    cursor.execute("UPDATE products SET is_active = %s WHERE product_id = %s", (new_status, product_id))
+    db.commit()
+    cursor.close()
+
+    label = "archived" if new_status == 0 else "restored"
+    return jsonify({"message": f"Product {label} successfully"}), 200
+
+
+# DELETE /api/supplier/products/<id>
+@supplier_bp.route("/products/<int:product_id>", methods=["DELETE"])
+@jwt_required()
+def delete_supplier_product(product_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT product_id FROM products WHERE product_id = %s AND created_by = %s", (product_id, user_id))
+    if not cursor.fetchone():
+        return jsonify({"error": "Product not found or access denied"}), 404
+
+    cursor.execute("DELETE FROM products WHERE product_id = %s", (product_id,))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Product deleted successfully"}), 200
