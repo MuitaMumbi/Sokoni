@@ -455,3 +455,151 @@ def delete_supplier_product(product_id):
     cursor.close()
 
     return jsonify({"message": "Product deleted successfully"}), 200
+
+# GET /api/supplier/inventory — view all inventory for this supplier
+@supplier_bp.route("/inventory", methods=["GET"])
+@jwt_required()
+def get_inventory():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT i.inventory_id, i.quantity, i.low_stock_threshold,
+               i.updated_at, p.product_id, p.product_name,
+               p.product_photo, p.unit,
+               CASE
+                   WHEN i.quantity = 0 THEN 'out_of_stock'
+                   WHEN i.quantity <= i.low_stock_threshold THEN 'low_stock'
+                   ELSE 'in_stock'
+               END AS stock_status
+        FROM inventory i
+        JOIN products p ON p.product_id = i.product_id
+        WHERE i.supplier_id = %s
+        ORDER BY i.updated_at DESC
+    """, (user_id,))
+    inventory = cursor.fetchall()
+    cursor.close()
+
+    return jsonify({"inventory": inventory}), 200
+
+
+# PATCH /api/supplier/inventory/<id> — update stock quantity
+@supplier_bp.route("/inventory/<int:inventory_id>", methods=["PATCH"])
+@jwt_required()
+def update_inventory(inventory_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT * FROM inventory
+        WHERE inventory_id = %s AND supplier_id = %s
+    """, (inventory_id, user_id))
+    record = cursor.fetchone()
+    if not record:
+        return jsonify({"error": "Inventory record not found or access denied"}), 404
+
+    data          = request.get_json() or {}
+    quantity      = data.get("quantity")
+    movement_type = data.get("movement_type", "adjustment")
+    note          = data.get("note", "")
+    threshold     = data.get("low_stock_threshold")
+
+    if quantity is None:
+        return jsonify({"error": "quantity is required"}), 400
+
+    try:
+        quantity = int(quantity)
+    except ValueError:
+        return jsonify({"error": "quantity must be a number"}), 400
+
+    valid_types = {"stock_in", "stock_out", "adjustment", "return", "damage"}
+    if movement_type not in valid_types:
+        return jsonify({"error": f"movement_type must be one of: {', '.join(valid_types)}"}), 400
+
+    # Calculate new quantity based on movement type
+    old_quantity = record["quantity"]
+    if movement_type == "stock_in" or movement_type == "return":
+        new_quantity = old_quantity + quantity
+    elif movement_type == "stock_out" or movement_type == "damage":
+        new_quantity = max(0, old_quantity - quantity)
+    else:  # adjustment — set directly
+        new_quantity = quantity
+
+    updates = ["quantity = %s"]
+    vals    = [new_quantity]
+
+    if threshold is not None:
+        updates.append("low_stock_threshold = %s")
+        vals.append(int(threshold))
+
+    vals.append(inventory_id)
+    cursor.execute(
+        f"UPDATE inventory SET {', '.join(updates)} WHERE inventory_id = %s", vals
+    )
+
+    # Also sync products.stock
+    cursor.execute(
+        "UPDATE products SET stock = %s WHERE product_id = %s",
+        (new_quantity, record["product_id"])
+    )
+
+    # Log the movement
+    cursor.execute("""
+        INSERT INTO inventory_movements
+            (inventory_id, supplier_id, product_id, movement_type, quantity, note, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (inventory_id, user_id, record["product_id"], movement_type, quantity, note, user_id))
+
+    db.commit()
+    cursor.close()
+
+    return jsonify({
+        "message": "Inventory updated",
+        "old_quantity": old_quantity,
+        "new_quantity": new_quantity,
+        "movement_type": movement_type,
+    }), 200
+
+
+# GET /api/supplier/inventory/<id>/history — movement audit log
+@supplier_bp.route("/inventory/<int:inventory_id>/history", methods=["GET"])
+@jwt_required()
+def get_inventory_history(inventory_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    # Confirm this inventory record belongs to the supplier
+    cursor.execute("""
+        SELECT inventory_id FROM inventory
+        WHERE inventory_id = %s AND supplier_id = %s
+    """, (inventory_id, user_id))
+    if not cursor.fetchone():
+        return jsonify({"error": "Inventory record not found or access denied"}), 404
+
+    cursor.execute("""
+        SELECT m.movement_id, m.movement_type, m.quantity,
+               m.note, m.created_at, p.product_name
+        FROM inventory_movements m
+        JOIN products p ON p.product_id = m.product_id
+        WHERE m.inventory_id = %s
+        ORDER BY m.created_at DESC
+    """, (inventory_id,))
+    history = cursor.fetchall()
+    cursor.close()
+
+    return jsonify({"history": history}), 200
