@@ -8,6 +8,16 @@ from werkzeug.utils import secure_filename
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
 supplier_bp = Blueprint("supplier", __name__)
 
+def create_notification(db, user_id, title, message, notif_type):
+    """Insert a notification record for a user."""
+    cursor = db.cursor()
+    cursor.execute("""
+        INSERT INTO notifications (user_id, title, message, type)
+        VALUES (%s, %s, %s, %s)
+    """, (user_id, title, message, notif_type))
+    db.commit()
+    cursor.close()
+
 # Helper function to check if the user is an approved supplier
 def require_approved_supplier():
     """Ensures the caller is a supplier and is approved."""
@@ -456,6 +466,163 @@ def delete_supplier_product(product_id):
 
     return jsonify({"message": "Product deleted successfully"}), 200
 
+# GET /api/supplier/inventory — view all inventory for this supplier
+@supplier_bp.route("/inventory", methods=["GET"])
+@jwt_required()
+def get_inventory():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT i.inventory_id, i.quantity, i.low_stock_threshold,
+               i.updated_at, p.product_id, p.product_name,
+               p.product_photo, p.unit,
+               CASE
+                   WHEN i.quantity = 0 THEN 'out_of_stock'
+                   WHEN i.quantity <= i.low_stock_threshold THEN 'low_stock'
+                   ELSE 'in_stock'
+               END AS stock_status
+        FROM inventory i
+        JOIN products p ON p.product_id = i.product_id
+        WHERE i.supplier_id = %s
+        ORDER BY i.updated_at DESC
+    """, (user_id,))
+    inventory = cursor.fetchall()
+    cursor.close()
+
+    return jsonify({"inventory": inventory}), 200
+
+
+# PATCH /api/supplier/inventory/<id> — update stock quantity
+@supplier_bp.route("/inventory/<int:inventory_id>", methods=["PATCH"])
+@jwt_required()
+def update_inventory(inventory_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT * FROM inventory
+        WHERE inventory_id = %s AND supplier_id = %s
+    """, (inventory_id, user_id))
+    record = cursor.fetchone()
+    if not record:
+        return jsonify({"error": "Inventory record not found or access denied"}), 404
+
+    data          = request.get_json() or {}
+    quantity      = data.get("quantity")
+    movement_type = data.get("movement_type", "adjustment")
+    note          = data.get("note", "")
+    threshold     = data.get("low_stock_threshold")
+
+    if quantity is None:
+        return jsonify({"error": "quantity is required"}), 400
+
+    try:
+        quantity = int(quantity)
+    except ValueError:
+        return jsonify({"error": "quantity must be a number"}), 400
+
+    valid_types = {"stock_in", "stock_out", "adjustment", "return", "damage"}
+    if movement_type not in valid_types:
+        return jsonify({"error": f"movement_type must be one of: {', '.join(valid_types)}"}), 400
+
+    # Calculate new quantity based on movement type
+    old_quantity = record["quantity"]
+    if movement_type == "stock_in" or movement_type == "return":
+        new_quantity = old_quantity + quantity
+    elif movement_type == "stock_out" or movement_type == "damage":
+        new_quantity = max(0, old_quantity - quantity)
+    else:  # adjustment — set directly
+        new_quantity = quantity
+
+    updates = ["quantity = %s"]
+    vals    = [new_quantity]
+
+    if threshold is not None:
+        updates.append("low_stock_threshold = %s")
+        vals.append(int(threshold))
+
+    vals.append(inventory_id)
+    cursor.execute(
+        f"UPDATE inventory SET {', '.join(updates)} WHERE inventory_id = %s", vals
+    )
+
+    # Also sync products.stock
+    cursor.execute(
+        "UPDATE products SET stock = %s WHERE product_id = %s",
+        (new_quantity, record["product_id"])
+    )
+
+    # Log the movement
+    cursor.execute("""
+        INSERT INTO inventory_movements
+            (inventory_id, supplier_id, product_id, movement_type, quantity, note, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (inventory_id, user_id, record["product_id"], movement_type, quantity, note, user_id))
+
+    db.commit()
+
+    if new_quantity <= record["low_stock_threshold"] and new_quantity > 0:
+        create_notification(
+            db, user_id,
+            title="Low Stock Alert",
+            message=f"Stock for product #{record['product_id']} is running low ({new_quantity} units remaining).",
+            notif_type="low_stock"
+        )
+
+    cursor.close()
+
+    return jsonify({
+        "message": "Inventory updated",
+        "old_quantity": old_quantity,
+        "new_quantity": new_quantity,
+        "movement_type": movement_type,
+    }), 200
+
+
+# GET /api/supplier/inventory/<id>/history — movement audit log
+@supplier_bp.route("/inventory/<int:inventory_id>/history", methods=["GET"])
+@jwt_required()
+def get_inventory_history(inventory_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    # Confirm this inventory record belongs to the supplier
+    cursor.execute("""
+        SELECT inventory_id FROM inventory
+        WHERE inventory_id = %s AND supplier_id = %s
+    """, (inventory_id, user_id))
+    if not cursor.fetchone():
+        return jsonify({"error": "Inventory record not found or access denied"}), 404
+
+    cursor.execute("""
+        SELECT m.movement_id, m.movement_type, m.quantity,
+               m.note, m.created_at, p.product_name
+        FROM inventory_movements m
+        JOIN products p ON p.product_id = m.product_id
+        WHERE m.inventory_id = %s
+        ORDER BY m.created_at DESC
+    """, (inventory_id,))
+    history = cursor.fetchall()
+    cursor.close()
+
+    return jsonify({"history": history}), 200
+
 # GET /api/supplier/purchase-orders — list all POs for this supplier
 @supplier_bp.route("/purchase-orders", methods=["GET"])
 @jwt_required()
@@ -575,6 +742,24 @@ def respond_to_purchase_order(po_id):
     cursor.execute("""
         UPDATE purchase_orders SET status = %s WHERE po_id = %s
     """, (new_status, po_id))
+
+    # Notify supplier of their own response confirmation
+    # (in future, this would notify the admin instead)
+    if new_status == "accepted":
+        create_notification(
+            db, user_id,
+            title="Purchase Order Accepted",
+            message=f"You have accepted purchase order #{po_id}. Please prepare for dispatch.",
+            notif_type="po_updated"
+        )
+    else:
+        create_notification(
+            db, user_id,
+            title="Purchase Order Rejected",
+            message=f"You have rejected purchase order #{po_id}.",
+            notif_type="po_updated"
+        )
+
     db.commit()
     cursor.close()
 
@@ -807,6 +992,16 @@ def update_shipment_status(delivery_id):
                 user_id
             ))
 
+    if new_status == "delivered":
+        # ... existing inventory update code ...
+
+        create_notification(
+            db, user_id,
+            title="Delivery Confirmed",
+            message=f"Shipment #{delivery_id} has been marked as delivered. Inventory has been updated.",
+            notif_type="shipment_received"
+        )
+
     db.commit()
     cursor.close()
 
@@ -815,3 +1010,107 @@ def update_shipment_status(delivery_id):
         "delivery_id": delivery_id,
         "status":     new_status,
     }), 200
+
+
+# GET /api/supplier/notifications
+@supplier_bp.route("/notifications", methods=["GET"])
+@jwt_required()
+def get_notifications():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    unread_only = request.args.get("unread") == "true"
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = ["user_id = %s"]
+    params  = [user_id]
+
+    if unread_only:
+        filters.append("is_read = 0")
+
+    where = "WHERE " + " AND ".join(filters)
+
+    cursor.execute(f"""
+        SELECT * FROM notifications
+        {where}
+        ORDER BY created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    notifications = cursor.fetchall()
+
+    cursor.execute(f"SELECT COUNT(*) AS total FROM notifications {where}", params)
+    total = cursor.fetchone()["total"]
+
+    cursor.execute("""
+        SELECT COUNT(*) AS unread_count FROM notifications
+        WHERE user_id = %s AND is_read = 0
+    """, (user_id,))
+    unread_count = cursor.fetchone()["unread_count"]
+    cursor.close()
+
+    return jsonify({
+        "notifications": notifications,
+        "total":         total,
+        "unread_count":  unread_count,
+        "page":          page,
+        "limit":         limit,
+        "pages":         (total + limit - 1) // limit,
+    }), 200
+
+
+# PATCH /api/supplier/notifications/<id>/read — mark single as read
+@supplier_bp.route("/notifications/<int:notification_id>/read", methods=["PATCH"])
+@jwt_required()
+def mark_notification_read(notification_id):
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT notification_id FROM notifications
+        WHERE notification_id = %s AND user_id = %s
+    """, (notification_id, user_id))
+    if not cursor.fetchone():
+        return jsonify({"error": "Notification not found"}), 404
+
+    cursor.execute("""
+        UPDATE notifications SET is_read = 1
+        WHERE notification_id = %s
+    """, (notification_id,))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Notification marked as read"}), 200
+
+
+# PATCH /api/supplier/notifications/read-all — mark all as read
+@supplier_bp.route("/notifications/read-all", methods=["PATCH"])
+@jwt_required()
+def mark_all_notifications_read():
+    err = require_approved_supplier()
+    if err:
+        return err
+
+    user_id = get_jwt_identity()
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        UPDATE notifications SET is_read = 1
+        WHERE user_id = %s AND is_read = 0
+    """, (user_id,))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "All notifications marked as read"}), 200

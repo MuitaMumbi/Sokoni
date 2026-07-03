@@ -299,6 +299,24 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            notification_id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id         INT NOT NULL,
+            title           VARCHAR(200) NOT NULL,
+            message         TEXT NOT NULL,
+            type            ENUM(
+                                'product_approved', 'product_rejected',
+                                'po_created', 'po_updated',
+                                'shipment_received', 'payment_completed',
+                                'low_stock', 'announcement'
+                            ) NOT NULL,
+            is_read         TINYINT(1) NOT NULL DEFAULT 0,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """)
+
     # Column migrations — add any missing columns to existing tables
     migrations = [
         ("users",    "is_approved",        "TINYINT(1) NOT NULL DEFAULT 0"),
