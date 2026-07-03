@@ -267,3 +267,346 @@ def create_admin():
     cursor.close()
 
     return jsonify({"message": f"Admin account created for {username}"}), 201
+
+
+# POST /api/admin/purchase-orders — raise a PO against a supplier
+@admin_bp.route("/purchase-orders", methods=["POST"])
+@jwt_required()
+def create_purchase_order():
+    err = _require_admin()
+    if err:
+        return err
+
+    from flask_jwt_extended import get_jwt_identity
+    admin_id = get_jwt_identity()
+
+    data               = request.get_json() or {}
+    supplier_id        = data.get("supplier_id")
+    product_id         = data.get("product_id")
+    quantity_requested = data.get("quantity_requested")
+
+    if not all([supplier_id, product_id, quantity_requested]):
+        return jsonify({"error": "supplier_id, product_id and quantity_requested are required"}), 400
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    # Confirm supplier exists and is approved
+    cursor.execute("""
+        SELECT user_id FROM users
+        WHERE user_id = %s AND role = 'supplier' AND is_approved = 1
+    """, (supplier_id,))
+    if not cursor.fetchone():
+        return jsonify({"error": "Supplier not found or not approved"}), 404
+
+    # Confirm product belongs to this supplier
+    cursor.execute("""
+        SELECT product_id FROM products
+        WHERE product_id = %s AND created_by = %s
+    """, (product_id, supplier_id))
+    if not cursor.fetchone():
+        return jsonify({"error": "Product not found or does not belong to this supplier"}), 404
+
+    cursor.execute("""
+        INSERT INTO purchase_orders
+            (product_id, supplier_id, quantity_requested, status, requested_by, auto_generated)
+        VALUES (%s, %s, %s, 'pending', %s, 0)
+    """, (product_id, supplier_id, int(quantity_requested), admin_id))
+    db.commit()
+    po_id = cursor.lastrowid
+
+    # Notify the supplier
+    cursor.execute("""
+        INSERT INTO notifications (user_id, title, message, type)
+        VALUES (%s, %s, %s, 'po_created')
+    """, (
+        supplier_id,
+        "New Purchase Order",
+        f"A new purchase order #{po_id} has been raised for {quantity_requested} units. Please review and respond.",
+    ))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Purchase order created", "po_id": po_id}), 201
+
+
+# GET /api/admin/purchase-orders — list all POs
+@admin_bp.route("/purchase-orders", methods=["GET"])
+@jwt_required()
+def list_purchase_orders():
+    err = _require_admin()
+    if err:
+        return err
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    status = request.args.get("status")
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = []
+    params  = []
+
+    if status:
+        filters.append("po.status = %s")
+        params.append(status)
+
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+
+    cursor.execute(f"""
+        SELECT po.po_id, po.quantity_requested, po.status,
+               po.auto_generated, po.created_at, po.updated_at,
+               p.product_name, p.unit,
+               u.username AS supplier_name, u.business_name
+        FROM purchase_orders po
+        JOIN products p ON p.product_id = po.product_id
+        JOIN users u ON u.user_id = po.supplier_id
+        {where}
+        ORDER BY po.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    orders = cursor.fetchall()
+
+    cursor.execute(f"""
+        SELECT COUNT(*) AS total FROM purchase_orders po {where}
+    """, params)
+    total = cursor.fetchone()["total"]
+    cursor.close()
+
+    return jsonify({
+        "purchase_orders": orders,
+        "total": total,
+        "page":  page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+    }), 200
+
+
+# GET /api/admin/deliveries — list all deliveries
+@admin_bp.route("/deliveries", methods=["GET"])
+@jwt_required()
+def list_deliveries():
+    err = _require_admin()
+    if err:
+        return err
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    status = request.args.get("status")
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = []
+    params  = []
+
+    if status:
+        filters.append("d.status = %s")
+        params.append(status)
+
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+
+    cursor.execute(f"""
+        SELECT d.delivery_id, d.quantity_delivered, d.status,
+               d.delivery_date, d.created_at,
+               po.po_id, po.quantity_requested,
+               p.product_name, p.unit,
+               u.username AS supplier_name, u.business_name
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        JOIN products p ON p.product_id = po.product_id
+        JOIN users u ON u.user_id = po.supplier_id
+        {where}
+        ORDER BY d.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    deliveries = cursor.fetchall()
+
+    cursor.execute(f"""
+        SELECT COUNT(*) AS total
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        {where}
+    """, params)
+    total = cursor.fetchone()["total"]
+    cursor.close()
+
+    return jsonify({
+        "deliveries": deliveries,
+        "total": total,
+        "page":  page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+    }), 200
+
+
+# PATCH /api/admin/deliveries/<id>/confirm — confirm receipt, create invoice
+@admin_bp.route("/deliveries/<int:delivery_id>/confirm", methods=["PATCH"])
+@jwt_required()
+def confirm_delivery(delivery_id):
+    err = _require_admin()
+    if err:
+        return err
+
+    from flask_jwt_extended import get_jwt_identity
+    admin_id = get_jwt_identity()
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT d.*, po.supplier_id, po.product_id, po.quantity_requested
+        FROM deliveries d
+        JOIN purchase_orders po ON po.po_id = d.po_id
+        WHERE d.delivery_id = %s
+    """, (delivery_id,))
+    delivery = cursor.fetchone()
+
+    if not delivery:
+        return jsonify({"error": "Delivery not found"}), 404
+
+    if delivery["status"] == "delivered":
+        return jsonify({"error": "Delivery already confirmed"}), 400
+
+    data           = request.get_json() or {}
+    amount         = data.get("amount")
+    due_date       = data.get("due_date")
+
+    if not amount:
+        return jsonify({"error": "amount is required to generate invoice"}), 400
+
+    # Confirm delivery
+    cursor.execute("""
+        UPDATE deliveries SET status = 'delivered', received_by = %s
+        WHERE delivery_id = %s
+    """, (admin_id, delivery_id))
+
+    # Update inventory
+    cursor.execute("""
+        UPDATE inventory SET quantity = quantity + %s
+        WHERE product_id = %s AND supplier_id = %s
+    """, (delivery["quantity_delivered"], delivery["product_id"], delivery["supplier_id"]))
+
+    # Sync products.stock
+    cursor.execute("""
+        UPDATE products SET stock = stock + %s WHERE product_id = %s
+    """, (delivery["quantity_delivered"], delivery["product_id"]))
+
+    # Create invoice
+    cursor.execute("""
+        INSERT INTO invoices (supplier_id, delivery_id, amount, status, due_date)
+        VALUES (%s, %s, %s, 'unpaid', %s)
+    """, (delivery["supplier_id"], delivery_id, float(amount), due_date))
+    db.commit()
+    invoice_id = cursor.lastrowid
+
+    # Notify supplier
+    cursor.execute("""
+        INSERT INTO notifications (user_id, title, message, type)
+        VALUES (%s, %s, %s, 'shipment_received')
+    """, (
+        delivery["supplier_id"],
+        "Delivery Confirmed",
+        f"Your delivery #{delivery_id} has been received. Invoice #{invoice_id} of KES {amount} has been generated.",
+    ))
+    db.commit()
+    cursor.close()
+
+    return jsonify({
+        "message":    "Delivery confirmed and invoice generated",
+        "invoice_id": invoice_id,
+        "delivery_id": delivery_id,
+    }), 200
+
+
+# GET /api/admin/invoices — list all invoices
+@admin_bp.route("/invoices", methods=["GET"])
+@jwt_required()
+def list_invoices():
+    err = _require_admin()
+    if err:
+        return err
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    status = request.args.get("status")
+    page   = max(1, int(request.args.get("page", 1)))
+    limit  = min(100, int(request.args.get("limit", 20)))
+    offset = (page - 1) * limit
+
+    filters = []
+    params  = []
+
+    if status:
+        filters.append("i.status = %s")
+        params.append(status)
+
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+
+    cursor.execute(f"""
+        SELECT i.invoice_id, i.amount, i.status, i.due_date, i.paid_at, i.created_at,
+               u.username AS supplier_name, u.business_name,
+               d.delivery_id, d.quantity_delivered
+        FROM invoices i
+        JOIN users u ON u.user_id = i.supplier_id
+        JOIN deliveries d ON d.delivery_id = i.delivery_id
+        {where}
+        ORDER BY i.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset])
+    invoices = cursor.fetchall()
+
+    cursor.execute(f"SELECT COUNT(*) AS total FROM invoices i {where}", params)
+    total = cursor.fetchone()["total"]
+    cursor.close()
+
+    return jsonify({
+        "invoices": invoices,
+        "total": total,
+        "page":  page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+    }), 200
+
+
+# PATCH /api/admin/invoices/<id>/pay — mark invoice as paid
+@admin_bp.route("/invoices/<int:invoice_id>/pay", methods=["PATCH"])
+@jwt_required()
+def mark_invoice_paid(invoice_id):
+    err = _require_admin()
+    if err:
+        return err
+
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM invoices WHERE invoice_id = %s", (invoice_id,))
+    invoice = cursor.fetchone()
+
+    if not invoice:
+        return jsonify({"error": "Invoice not found"}), 404
+    if invoice["status"] == "paid":
+        return jsonify({"error": "Invoice already paid"}), 400
+
+    cursor.execute("""
+        UPDATE invoices SET status = 'paid', paid_at = NOW()
+        WHERE invoice_id = %s
+    """, (invoice_id,))
+
+    # Notify supplier
+    cursor.execute("""
+        INSERT INTO notifications (user_id, title, message, type)
+        VALUES (%s, %s, %s, 'payment_completed')
+    """, (
+        invoice["supplier_id"],
+        "Payment Received",
+        f"Invoice #{invoice_id} of KES {invoice['amount']} has been marked as paid.",
+    ))
+    db.commit()
+    cursor.close()
+
+    return jsonify({"message": "Invoice marked as paid", "invoice_id": invoice_id}), 200
